@@ -69,3 +69,26 @@ export function analyticalConcentration(x_m: number, x0_m: number, D: number, t:
   if (t <= 0) return x_m < x0_m ? 1.0 : 0.0;
   return 0.5 * erfcApprox((x_m - x0_m) / (2.0 * Math.sqrt(D * t)));
 }
+
+// ============================================================
+// Extension path: Cahn–Hilliard phase field model
+//
+// The current Fickian engine solves ∂C/∂t = D∇²C.
+// A phase field extension would solve the Cahn–Hilliard equation:
+//
+//   ∂φ/∂t = M∇²(f'(φ) − ε²∇²φ)
+//
+// where:
+//   φ       = order parameter (composition)
+//   M       = mobility (may depend on φ)
+//   f(φ)    = bulk free energy density (e.g. regular solution model)
+//   ε       = gradient energy coefficient (sets interface width)
+//
+// Implementation requires:
+//   1. Semi-implicit time integration (explicit for ∇² is CFL-limited)
+//   2. Split-Laplacian approach: introduce μ = f'(φ) − ε²∇²φ,
+//      then solve ∂φ/∂t = M∇²μ as two coupled second-order PDEs
+//   3. Thermodynamic free energy module: f(φ) = Ωφ(1−φ) + RT[φlnφ + (1−φ)ln(1−φ)]
+//   4. A CahnHilliardSolver implementing the same Solver interface
+//      can be swapped in at main.ts — the app/ layer stays unchanged
+// ============================================================

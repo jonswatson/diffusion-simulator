@@ -10,6 +10,7 @@ import { Solver, MATERIALS } from '../engine';
 import type { SimConfig } from '../engine';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
+import { createValidation, fieldSum, runValidationChecks } from './validation';
 
 export interface UIContext {
   solver: Solver;
@@ -60,7 +61,12 @@ export function initUI(ctx: UIContext): FrameCallback {
   const infoTime = $('info-time');
   const infoSteps = $('info-steps');
   const infoFps = $('info-fps');
+  const infoMassError = $('info-mass-error');
+  const infoRmsError = $('info-rms-error');
   const warningsDiv = $('warnings');
+
+  // Validation state
+  let validation = createValidation();
 
   // Current config state
   let currentMaterialKey = selMaterial.value;
@@ -105,6 +111,9 @@ export function initUI(ctx: UIContext): FrameCallback {
     if (wasPlaying) ctx.loop.pause();
     const field = generateDefaultField(currentGridWidth) as Float32Array<ArrayBuffer>;
     ctx.solver.loadField(field);
+    // Record initial mass for conservation checking
+    validation = createValidation();
+    validation.initialMass = fieldSum(field);
     if (wasPlaying) ctx.loop.play();
   }
 
@@ -214,9 +223,17 @@ export function initUI(ctx: UIContext): FrameCallback {
 
     const field = await imageFileToField(file, currentGridWidth) as Float32Array<ArrayBuffer>;
     ctx.solver.loadField(field);
+    validation = createValidation();
+    validation.initialMass = fieldSum(field);
 
     if (wasPlaying) ctx.loop.play();
   });
+
+  // Initialize validation with current default field
+  {
+    const initField = generateDefaultField(currentGridWidth);
+    validation.initialMass = fieldSum(initField);
+  }
 
   // Return the per-frame callback for the loop to call
   return (info) => {
@@ -228,5 +245,18 @@ export function initUI(ctx: UIContext): FrameCallback {
     infoTime.textContent = formatTime(state.time);
     infoSteps.textContent = info.stepsRun.toLocaleString();
     infoFps.textContent = `${info.fps.toFixed(0)}`;
+
+    // Validation readouts
+    infoMassError.textContent = validation.lastMassError > 0
+      ? `${(validation.lastMassError * 100).toFixed(4)}%`
+      : '—';
+    infoRmsError.textContent = validation.lastAnalyticalRMS > 0
+      ? `${(validation.lastAnalyticalRMS * 100).toFixed(2)}%`
+      : '—';
+
+    // Run async validation checks (throttled internally)
+    if (state.stepsRun > 0) {
+      runValidationChecks(validation, ctx.solver, currentGridWidth);
+    }
   };
 }
