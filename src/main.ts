@@ -1,6 +1,8 @@
 import './style.css';
 import { Solver, MATERIALS } from './engine';
 import { generateDefaultField } from './app/imageLoader';
+import { createLoop } from './app/loop';
+import type { Loop } from './app/loop';
 
 /** Request a WebGPU device, preferring the discrete GPU on dual-GPU laptops. */
 async function initGPU(): Promise<GPUDevice> {
@@ -59,7 +61,11 @@ async function main(): Promise<void> {
     // Default initial condition: cosine-smoothed step function
     const field = generateDefaultField(W) as Float32Array<ArrayBuffer>;
     solver.loadField(field);
-    solver.render();
+
+    // Create the simulation loop (renders every frame, steps only when playing)
+    const loop = createLoop(solver, (_info) => {
+      // UI info updates will be wired in Stage 7
+    });
 
     console.log('GPU ready:', device.label);
     console.log(`Grid: ${W}×${H}, canvas format: ${canvasFormat}`);
@@ -67,7 +73,7 @@ async function main(): Promise<void> {
     // Expose for Playwright E2E tests (stripped from production builds)
     if (import.meta.env.DEV) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).__sim = { device, engine: solver };
+      (window as any).__sim = { device, engine: solver, loop };
     }
   } catch (err) {
     showError(err instanceof Error ? err.message : String(err));
