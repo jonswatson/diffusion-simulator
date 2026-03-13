@@ -12,14 +12,16 @@ export interface Loop {
   play(): void;
   pause(): void;
   setStepsPerSecond(sps: number): void;
+  setEngine(newEngine: Solver): void;
   readonly playing: boolean;
 }
 
 /** Create the RAF loop. Renders every frame (even when paused). */
 export function createLoop(
-  engine: Solver,
+  initialEngine: Solver,
   onFrame: (info: { time: number; stepsRun: number; fps: number }) => void,
 ): Loop {
+  let engine = initialEngine;
   let playing = false;
   let lastTimestamp = 0;
   let stepsPerSecond = 100;
@@ -68,6 +70,9 @@ export function createLoop(
     },
     setStepsPerSecond(sps: number) {
       stepsPerSecond = Math.max(1, Math.round(sps));
+    },
+    setEngine(newEngine: Solver) {
+      engine = newEngine;
     },
     get playing() { return playing; },
   };

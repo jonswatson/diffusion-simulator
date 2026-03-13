@@ -12,9 +12,82 @@
       <h2>WebGPU not available</h2>
       <p>This app requires WebGPU. Please use Chrome 113+ or Edge 113+.</p>
     </div>
-    <canvas id="sim-canvas" width="256" height="256"></canvas>
-    <div id="ui-panel"><!-- controls added in Stage 7 --></div>
-    <div id="info-panel"><!-- readouts added in Stage 7 --></div>
+
+    <div id="sim-column">
+      <canvas id="sim-canvas" width="256" height="256"></canvas>
+      <div id="sim-toolbar">
+        <button id="btn-play" title="Play">&#9654;</button>
+        <button id="btn-pause" title="Pause" disabled>&#9646;&#9646;</button>
+        <button id="btn-reset" title="Reset">&#8634;</button>
+      </div>
+    </div>
+
+    <div id="controls-column">
+      <div id="ui-panel">
+        <h3>Material System</h3>
+        <label>
+          Material pair
+          <select id="sel-material">
+            <option value="Cu-in-Al" selected>Cu in Al</option>
+            <option value="Al-self">Al (self-diffusion)</option>
+            <option value="C-in-gFe">C in &gamma;-Fe</option>
+            <option value="Ni-in-Cu">Ni in Cu</option>
+          </select>
+        </label>
+
+        <label>
+          Temperature: <span id="val-temperature">873</span> K
+          <input id="sl-temperature" type="range" min="300" max="1500" value="873" step="1" />
+        </label>
+
+        <h3>Domain</h3>
+        <label>
+          Domain size
+          <select id="sel-domain">
+            <option value="50e-6">50 &micro;m</option>
+            <option value="100e-6" selected>100 &micro;m</option>
+            <option value="200e-6">200 &micro;m</option>
+            <option value="500e-6">500 &micro;m</option>
+            <option value="1e-3">1 mm</option>
+          </select>
+        </label>
+
+        <label>
+          Grid resolution
+          <select id="sel-grid">
+            <option value="128">128 &times; 128</option>
+            <option value="256" selected>256 &times; 256</option>
+            <option value="512">512 &times; 512</option>
+          </select>
+        </label>
+
+        <h3>Speed</h3>
+        <label>
+          Steps/s: <span id="val-speed">100</span>
+          <input id="sl-speed" type="range" min="0" max="5" value="2" step="0.1" />
+        </label>
+
+        <h3>Initial Condition</h3>
+        <label>
+          Upload grayscale image
+          <input id="inp-image" type="file" accept="image/*" />
+        </label>
+      </div>
+
+      <div id="info-panel">
+        <h3>Simulation Info</h3>
+        <table>
+          <tr><td>D(T)</td><td id="info-D">—</td></tr>
+          <tr><td>dt</td><td id="info-dt">—</td></tr>
+          <tr><td>dx</td><td id="info-dx">—</td></tr>
+          <tr><td>r (Fourier)</td><td id="info-r">—</td></tr>
+          <tr><td>Sim time</td><td id="info-time">—</td></tr>
+          <tr><td>Steps</td><td id="info-steps">—</td></tr>
+          <tr><td>FPS</td><td id="info-fps">—</td></tr>
+        </table>
+        <div id="warnings"></div>
+      </div>
+    </div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

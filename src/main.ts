@@ -2,7 +2,8 @@ import './style.css';
 import { Solver, MATERIALS } from './engine';
 import { generateDefaultField } from './app/imageLoader';
 import { createLoop } from './app/loop';
-import type { Loop } from './app/loop';
+import { initUI } from './app/ui';
+import type { UIContext, FrameCallback } from './app/ui';
 
 /** Request a WebGPU device, preferring the discrete GPU on dual-GPU laptops. */
 async function initGPU(): Promise<GPUDevice> {
@@ -45,7 +46,6 @@ async function main(): Promise<void> {
 
     const W = canvas.width;
     const H = canvas.height;
-
     const solver = new Solver({ device, context, canvasFormat, width: W, height: H });
 
     // Configure physics: Cu-in-Al at 873K (600°C), 100µm domain
@@ -62,10 +62,35 @@ async function main(): Promise<void> {
     const field = generateDefaultField(W) as Float32Array<ArrayBuffer>;
     solver.loadField(field);
 
-    // Create the simulation loop (renders every frame, steps only when playing)
-    const loop = createLoop(solver, (_info) => {
-      // UI info updates will be wired in Stage 7
-    });
+    // Frame callback — set by initUI
+    let onFrame: FrameCallback = () => {};
+
+    // Create the simulation loop
+    const loop = createLoop(solver, (info) => onFrame(info));
+
+    // UIContext is a mutable ref — recreateEngine updates ctx.solver so
+    // all UI closures see the new engine without being re-wired.
+    const ctx: UIContext = {
+      solver,
+      loop,
+      canvas,
+      recreateEngine: async (gridWidth: number) => {
+        canvas.width = gridWidth;
+        canvas.height = gridWidth;
+        context.configure({ device, format: canvasFormat });
+        const newSolver = new Solver({ device, context, canvasFormat, width: gridWidth, height: gridWidth });
+        ctx.solver = newSolver;
+        loop.setEngine(newSolver);
+
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).__sim = { device, engine: newSolver, loop };
+        }
+      },
+    };
+
+    // Wire up UI controls
+    onFrame = initUI(ctx);
 
     console.log('GPU ready:', device.label);
     console.log(`Grid: ${W}×${H}, canvas format: ${canvasFormat}`);

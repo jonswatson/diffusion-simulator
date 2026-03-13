@@ -15,15 +15,138 @@ body {
 #app {
   display: flex;
   flex: 1;
-  gap: 16px;
-  padding: 16px;
+  gap: 24px;
+  padding: 24px;
+  align-items: flex-start;
+}
+
+/* ---- Simulation canvas + toolbar ---- */
+#sim-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 #sim-canvas {
   background: #111;
   border: 1px solid #333;
+  image-rendering: pixelated;
 }
 
+#sim-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+#sim-toolbar button {
+  padding: 6px 16px;
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+#sim-toolbar button:hover:not(:disabled) {
+  background: #3a3a3a;
+}
+
+#sim-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- Controls column ---- */
+#controls-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 260px;
+  flex-shrink: 0;
+}
+
+#ui-panel, #info-panel {
+  font-size: 13px;
+  background: #222;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+#ui-panel h3, #info-panel h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+  margin-bottom: 8px;
+  margin-top: 12px;
+}
+
+#ui-panel h3:first-child, #info-panel h3:first-child {
+  margin-top: 0;
+}
+
+#ui-panel label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+#ui-panel select, #ui-panel input[type="file"] {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+#ui-panel input[type="range"] {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* ---- Info panel table ---- */
+#info-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#info-panel td {
+  padding: 2px 0;
+}
+
+#info-panel td:first-child {
+  color: #888;
+  width: 80px;
+}
+
+#info-panel td:last-child {
+  text-align: right;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 12px;
+}
+
+/* ---- Warnings ---- */
+#warnings {
+  margin-top: 8px;
+}
+
+#warnings .warning {
+  background: #3a2c1c;
+  border: 1px solid #8b6a3a;
+  color: #e0c060;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+/* ---- Error banner ---- */
 #error-banner {
   background: #3a1c1c;
   border: 1px solid #8b3a3a;
@@ -36,8 +159,4 @@ body {
 #error-banner h2 {
   color: #e06060;
   margin-bottom: 8px;
-}
-
-#ui-panel, #info-panel {
-  font-size: 14px;
 }
