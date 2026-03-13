@@ -21,10 +21,18 @@ export async function readField(page: Page): Promise<number[]> {
   });
 }
 
-/** Dispatch n physics steps then wait briefly for GPU to flush */
+/** Dispatch n physics steps in batches to avoid GPU timeout, then flush */
 export async function stepEngine(page: Page, n: number): Promise<void> {
-  await page.evaluate((n: number) => (window as any).__sim.engine.step(n), n);
-  await page.waitForTimeout(100);
+  await page.evaluate(async (steps: number) => {
+    const engine = (window as any).__sim.engine;
+    const batchSize = 100;
+    for (let remaining = steps; remaining > 0; remaining -= batchSize) {
+      engine.step(Math.min(batchSize, remaining));
+    }
+    // Force GPU flush by submitting a no-op and waiting
+    const device = (window as any).__sim.device;
+    await device.queue.onSubmittedWorkDone();
+  }, n);
 }
 
 /** Sum all values in the field (total mass) */

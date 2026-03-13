@@ -45,8 +45,24 @@ async function main(): Promise<void> {
 
     const solver = new Solver({ device, context, canvasFormat, width: W, height: H });
 
-    // Stage 1: run fill shader once to generate checkerboard, then render
-    solver.step(1);
+    // Default initial condition: left half = 1.0 (B), right half = 0.0 (A)
+    // Cosine-smoothed 5%-wide interface to avoid numerical ringing
+    const field = new Float32Array(W * H) as Float32Array<ArrayBuffer>;
+    const cx = W / 2;
+    const blendW = Math.max(3, Math.floor(W * 0.05));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const d = x - cx;
+        if (d < -blendW) {
+          field[y * W + x] = 1.0;
+        } else if (d > blendW) {
+          field[y * W + x] = 0.0;
+        } else {
+          field[y * W + x] = 0.5 * (1 - Math.sin((Math.PI * d) / (2 * blendW)));
+        }
+      }
+    }
+    solver.loadField(field);
     solver.render();
 
     console.log('GPU ready:', device.label);

@@ -6,7 +6,7 @@
 // ============================================================
 
 import { createFieldBuffer, createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
-import fillWGSL from './shaders/fill.wgsl?raw';
+import diffusionWGSL from './shaders/diffusion.wgsl?raw';
 import renderWGSL from './shaders/render.wgsl?raw';
 
 export interface SolverConfig {
@@ -67,7 +67,7 @@ export class Solver {
       1.0, 1.0, 1.0, 0.0, // colorB: white
     ]));
 
-    // --- Compute pipeline (fill shader for Stage 1) ---
+    // --- Compute pipeline (FTCS diffusion stencil) ---
     this.computeBindGroupLayout = device.createBindGroupLayout({
       label: 'compute-bgl',
       entries: [
@@ -78,9 +78,9 @@ export class Solver {
     });
 
     this.computePipeline = device.createComputePipeline({
-      label: 'fill-pipeline',
+      label: 'diffusion-pipeline',
       layout: device.createPipelineLayout({ bindGroupLayouts: [this.computeBindGroupLayout] }),
-      compute: { module: device.createShaderModule({ code: fillWGSL, label: 'fill' }), entryPoint: 'main' },
+      compute: { module: device.createShaderModule({ code: diffusionWGSL, label: 'diffusion' }), entryPoint: 'main' },
     });
 
     this.bindGroupAtoB = this.makeComputeBindGroup(this.bufA, this.bufB);
