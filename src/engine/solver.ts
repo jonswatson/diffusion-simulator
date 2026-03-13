@@ -6,6 +6,8 @@
 // ============================================================
 
 import { createFieldBuffer, createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
+import { arrheniusDiffusivity, computeDx, computeDt, fourierNumber } from './physics';
+import type { SimConfig } from './materials';
 import diffusionWGSL from './shaders/diffusion.wgsl?raw';
 import renderWGSL from './shaders/render.wgsl?raw';
 
@@ -17,8 +19,18 @@ export interface SolverConfig {
   height: number;
 }
 
+/** CPU-side simulation state. No GPU readback needed. */
+export interface EngineState {
+  time: number;         // seconds simulated (f64 precision)
+  diffusivity: number;  // m²/s — D(T)
+  dx: number;           // m/pixel
+  dt: number;           // seconds/step
+  r: number;            // Fourier number ≈ 0.1
+  stepsRun: number;
+}
+
 export class Solver {
-  private device: GPUDevice;
+  readonly device: GPUDevice;
   private context: GPUCanvasContext;
   private width: number;
   private height: number;
@@ -29,7 +41,7 @@ export class Solver {
   private uniformBuffer: GPUBuffer;
   private materialColorBuffer: GPUBuffer;
 
-  // Compute pipeline (fill.wgsl in Stage 1, diffusion.wgsl from Stage 2)
+  // Compute pipeline (FTCS diffusion stencil)
   private computePipeline: GPUComputePipeline;
   private computeBindGroupLayout: GPUBindGroupLayout;
   private bindGroupAtoB: GPUBindGroup;
@@ -40,7 +52,25 @@ export class Solver {
   private renderPipeline: GPURenderPipeline;
   private renderBindGroup: GPUBindGroup;
 
-  stepsRun = 0;
+  // CPU-side state tracking (f64 for time precision)
+  private _state: EngineState = {
+    time: 0,
+    diffusivity: 0,
+    dx: 0,
+    dt: 0,
+    r: 0.1,
+    stepsRun: 0,
+  };
+
+  /** CPU-side simulation state — no GPU readback needed. */
+  get state(): EngineState {
+    return this._state;
+  }
+
+  /** Backwards-compatible alias for stepsRun */
+  get stepsRun(): number {
+    return this._state.stepsRun;
+  }
 
   constructor(config: SolverConfig) {
     const { device, context, canvasFormat, width, height } = config;
@@ -55,13 +85,10 @@ export class Solver {
     this.uniformBuffer = createUniformBuffer(device, 16); // Uniforms: width, height, r, _pad
     this.materialColorBuffer = createUniformBuffer(device, 32); // 2 × (vec3f + f32 pad)
 
-    // Write initial uniform values
-    const uniformData = new ArrayBuffer(16);
-    new Uint32Array(uniformData, 0, 2).set([width, height]);
-    new Float32Array(uniformData, 8, 1).set([0.1]); // r placeholder
-    device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+    // Write initial uniform values (r=0.1 placeholder until updateConfig)
+    this.writeUniforms(width, height, 0.1);
 
-    // Default material colors: black (A) and white (B) for Stage 1 checkerboard
+    // Default material colors: black (A) and white (B)
     device.queue.writeBuffer(this.materialColorBuffer, 0, new Float32Array([
       0.0, 0.0, 0.0, 0.0, // colorA: black
       1.0, 1.0, 1.0, 0.0, // colorB: white
@@ -109,7 +136,6 @@ export class Solver {
       },
     });
 
-    // Render always reads from bufA initially (currentBuffer)
     this.renderBindGroup = device.createBindGroup({
       layout: renderBindGroupLayout,
       entries: [
@@ -118,6 +144,14 @@ export class Solver {
         { binding: 2, resource: { buffer: this.materialColorBuffer } },
       ],
     });
+  }
+
+  /** Write the GPU uniform struct: [width: u32, height: u32, r: f32, _pad: u32] */
+  private writeUniforms(width: number, height: number, r: number): void {
+    const uniformData = new ArrayBuffer(16);
+    new Uint32Array(uniformData, 0, 2).set([width, height]);
+    new Float32Array(uniformData, 8, 1).set([r]);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
   }
 
   private makeComputeBindGroup(readBuf: GPUBuffer, writeBuf: GPUBuffer): GPUBindGroup {
@@ -131,12 +165,28 @@ export class Solver {
     });
   }
 
+  /** Recompute physics parameters from a config. Updates the GPU uniform buffer. */
+  updateConfig(config: SimConfig): void {
+    const D  = arrheniusDiffusivity(config.material.D0, config.material.Q, config.temperature_K);
+    const dx = computeDx(config.domainSize_m, config.gridWidth);
+    const dt = computeDt(D, dx);
+    const r  = fourierNumber(D, dt, dx); // throws if r > 0.25
+
+    this._state.diffusivity = D;
+    this._state.dx = dx;
+    this._state.dt = dt;
+    this._state.r = r;
+
+    this.writeUniforms(this.width, this.height, r);
+  }
+
   /** Load a concentration field into the GPU. Resets simulation state. */
   loadField(data: Float32Array<ArrayBuffer>): void {
     this.device.queue.writeBuffer(this.bufA, 0, data);
     this.device.queue.writeBuffer(this.bufB, 0, new Float32Array(this.width * this.height) as Float32Array<ArrayBuffer>);
     this.currentBindGroup = this.bindGroupAtoB;
-    this.stepsRun = 0;
+    this._state.stepsRun = 0;
+    this._state.time = 0;
     this.updateRenderBindGroup();
   }
 
@@ -157,7 +207,8 @@ export class Solver {
 
     pass.end();
     this.device.queue.submit([encoder.finish()]);
-    this.stepsRun += n;
+    this._state.stepsRun += n;
+    this._state.time += n * this._state.dt;
     this.updateRenderBindGroup();
   }
 

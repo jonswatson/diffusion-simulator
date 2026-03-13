@@ -1,5 +1,5 @@
 import './style.css';
-import { Solver } from './engine/solver';
+import { Solver, MATERIALS } from './engine';
 
 /** Request a WebGPU device, preferring the discrete GPU on dual-GPU laptops. */
 async function initGPU(): Promise<GPUDevice> {
@@ -44,6 +44,16 @@ async function main(): Promise<void> {
     const H = canvas.height;
 
     const solver = new Solver({ device, context, canvasFormat, width: W, height: H });
+
+    // Configure physics: Cu-in-Al at 873K (600°C), 100µm domain
+    const material = MATERIALS['Cu-in-Al'];
+    solver.updateConfig({
+      material,
+      temperature_K: 873,
+      domainSize_m: 100e-6,
+      gridWidth: W,
+    });
+    solver.updateMaterialColors([0.75, 0.75, 0.82], material.color);
 
     // Default initial condition: left half = 1.0 (B), right half = 0.0 (A)
     // Cosine-smoothed 5%-wide interface to avoid numerical ringing

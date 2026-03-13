@@ -8,8 +8,8 @@ export async function waitForEngine(page: Page): Promise<void> {
 /** Read the current engine state (CPU-side values only — no GPU readback) */
 export async function getEngineState(page: Page) {
   return page.evaluate(() => {
-    const eng = (window as any).__sim.engine;
-    return { stepsRun: eng.stepsRun };
+    const s = (window as any).__sim.engine.state;
+    return { time: s.time, diffusivity: s.diffusivity, dx: s.dx, dt: s.dt, r: s.r, stepsRun: s.stepsRun };
   });
 }
 
@@ -29,9 +29,8 @@ export async function stepEngine(page: Page, n: number): Promise<void> {
     for (let remaining = steps; remaining > 0; remaining -= batchSize) {
       engine.step(Math.min(batchSize, remaining));
     }
-    // Force GPU flush by submitting a no-op and waiting
-    const device = (window as any).__sim.device;
-    await device.queue.onSubmittedWorkDone();
+    // Force GPU flush
+    await engine.device.queue.onSubmittedWorkDone();
   }, n);
 }
 

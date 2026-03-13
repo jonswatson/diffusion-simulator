@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60_000,
+  workers: 1, // WebGPU tests need exclusive GPU access
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:5173',
