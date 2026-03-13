@@ -1,0 +1,22 @@
+{
+  "name": "diffusion-simulator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test": "vitest run && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@webgpu/types": "^0.1.69",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.0"
+  }
+}

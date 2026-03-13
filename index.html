@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diffusion Simulator</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="error-banner" hidden>
+      <h2>WebGPU not available</h2>
+      <p>This app requires WebGPU. Please use Chrome 113+ or Edge 113+.</p>
+    </div>
+    <canvas id="sim-canvas" width="256" height="256"></canvas>
+    <div id="ui-panel"><!-- controls added in Stage 7 --></div>
+    <div id="info-panel"><!-- readouts added in Stage 7 --></div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
