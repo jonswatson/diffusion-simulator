@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60_000,
+  retries: 1, // Chrome GPU init can be flaky on first launch
   workers: 1, // WebGPU tests need exclusive GPU access
   webServer: {
     command: 'npm run dev',

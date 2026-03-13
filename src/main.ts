@@ -1,5 +1,6 @@
 import './style.css';
 import { Solver, MATERIALS } from './engine';
+import { generateDefaultField } from './app/imageLoader';
 
 /** Request a WebGPU device, preferring the discrete GPU on dual-GPU laptops. */
 async function initGPU(): Promise<GPUDevice> {
@@ -55,23 +56,8 @@ async function main(): Promise<void> {
     });
     solver.updateMaterialColors([0.75, 0.75, 0.82], material.color);
 
-    // Default initial condition: left half = 1.0 (B), right half = 0.0 (A)
-    // Cosine-smoothed 5%-wide interface to avoid numerical ringing
-    const field = new Float32Array(W * H) as Float32Array<ArrayBuffer>;
-    const cx = W / 2;
-    const blendW = Math.max(3, Math.floor(W * 0.05));
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const d = x - cx;
-        if (d < -blendW) {
-          field[y * W + x] = 1.0;
-        } else if (d > blendW) {
-          field[y * W + x] = 0.0;
-        } else {
-          field[y * W + x] = 0.5 * (1 - Math.sin((Math.PI * d) / (2 * blendW)));
-        }
-      }
-    }
+    // Default initial condition: cosine-smoothed step function
+    const field = generateDefaultField(W) as Float32Array<ArrayBuffer>;
     solver.loadField(field);
     solver.render();
 
