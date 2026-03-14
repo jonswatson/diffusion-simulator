@@ -6,19 +6,19 @@
 // 100ms frame cap prevents burst after tab backgrounding.
 // ============================================================
 
-import type { Solver } from '../engine/solver';
+import type { DiffusionEngine } from '../engine/types';
 
 export interface Loop {
   play(): void;
   pause(): void;
   setStepsPerSecond(sps: number): void;
-  setEngine(newEngine: Solver): void;
+  setEngine(newEngine: DiffusionEngine): void;
   readonly playing: boolean;
 }
 
 /** Create the RAF loop. Renders every frame (even when paused). */
 export function createLoop(
-  initialEngine: Solver,
+  initialEngine: DiffusionEngine,
   onFrame: (info: { time: number; stepsRun: number; fps: number }) => void,
 ): Loop {
   let engine = initialEngine;
@@ -71,7 +71,7 @@ export function createLoop(
     setStepsPerSecond(sps: number) {
       stepsPerSecond = Math.max(1, Math.round(sps));
     },
-    setEngine(newEngine: Solver) {
+    setEngine(newEngine: DiffusionEngine) {
       engine = newEngine;
     },
     get playing() { return playing; },

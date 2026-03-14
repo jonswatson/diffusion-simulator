@@ -3,6 +3,8 @@ import {
   arrheniusDiffusivity,
   computeDx,
   computeDt,
+  computeCHDt,
+  computeGGDt,
   fourierNumber,
   erfcApprox,
   analyticalConcentration,
@@ -160,5 +162,74 @@ describe('analyticalConcentration', () => {
     const C1 = analyticalConcentration(spread1, x0, D, t1);
     const C2 = analyticalConcentration(spread2, x0, D, t2);
     expect(C1).toBeCloseTo(C2, 3);
+  });
+});
+
+describe('computeCHDt', () => {
+  it('returns a positive timestep', () => {
+    const dt = computeCHDt(1.0, 1.0, 1.0, 1.0);
+    expect(dt).toBeGreaterThan(0);
+  });
+
+  it('decreases when mobility M increases', () => {
+    const dx = 1.0, eps = 1.0, A = 1.0;
+    const dt1 = computeCHDt(1.0, eps, A, dx);
+    const dt2 = computeCHDt(10.0, eps, A, dx);
+    expect(dt2).toBeLessThan(dt1);
+  });
+
+  it('decreases when epsilon increases', () => {
+    const dx = 1.0, M = 1.0, A = 1.0;
+    const dt1 = computeCHDt(M, 1.0, A, dx);
+    const dt2 = computeCHDt(M, 5.0, A, dx);
+    expect(dt2).toBeLessThan(dt1);
+  });
+
+  it('applies the safety factor', () => {
+    const dx = 1.0, M = 1.0, eps = 1.0, A = 1.0;
+    const dt_safe = computeCHDt(M, eps, A, dx, 0.05);
+    const dt_loose = computeCHDt(M, eps, A, dx, 0.2);
+    expect(dt_loose / dt_safe).toBeCloseTo(4.0, 5);
+  });
+
+  it('scales with dx⁴ for biharmonic-dominated case', () => {
+    // Large epsilon so biharmonic term dominates
+    const M = 1.0, eps = 10.0, A = 0.001;
+    const dt1 = computeCHDt(M, eps, A, 1.0);
+    const dt2 = computeCHDt(M, eps, A, 2.0);
+    expect(dt2 / dt1).toBeCloseTo(16.0, 1); // (2/1)^4 = 16
+  });
+});
+
+describe('computeGGDt', () => {
+  it('returns a positive timestep', () => {
+    const dt = computeGGDt(1.0, 1.0, 1.0, 1.0);
+    expect(dt).toBeGreaterThan(0);
+  });
+
+  it('takes the minimum of diffusion and reaction limits', () => {
+    // Diffusion-limited: large κ, small A → dt_diff < dt_react
+    const dt_diffLim = computeGGDt(1.0, 100.0, 0.001, 1.0, 1.0);
+    const dtDiffExpected = (1.0 * 1.0) / (4.0 * 1.0 * 100.0);
+    expect(dt_diffLim).toBeCloseTo(dtDiffExpected, 8);
+
+    // Reaction-limited: small κ, large A → dt_react < dt_diff
+    const dt_reactLim = computeGGDt(1.0, 0.001, 100.0, 1.0, 1.0);
+    const dtReactExpected = 1.0 / (1.0 * 2.0 * 100.0);
+    expect(dt_reactLim).toBeCloseTo(dtReactExpected, 8);
+  });
+
+  it('decreases when kinetic L increases', () => {
+    const dx = 1.0, kappa = 1.0, A = 1.0;
+    const dt1 = computeGGDt(1.0, kappa, A, dx);
+    const dt2 = computeGGDt(5.0, kappa, A, dx);
+    expect(dt2).toBeLessThan(dt1);
+  });
+
+  it('applies the safety factor', () => {
+    const L = 1.0, kappa = 1.0, A = 1.0, dx = 1.0;
+    const dt_safe = computeGGDt(L, kappa, A, dx, 0.1);
+    const dt_loose = computeGGDt(L, kappa, A, dx, 0.4);
+    expect(dt_loose / dt_safe).toBeCloseTo(4.0, 5);
   });
 });

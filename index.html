@@ -24,21 +24,77 @@
 
     <div id="controls-column">
       <div id="ui-panel">
-        <h3>Material System</h3>
+        <h3>Simulation Mode</h3>
         <label>
-          Material pair
-          <select id="sel-material">
-            <option value="Cu-in-Al" selected>Cu in Al</option>
-            <option value="Al-self">Al (self-diffusion)</option>
-            <option value="C-in-gFe">C in &gamma;-Fe</option>
-            <option value="Ni-in-Cu">Ni in Cu</option>
+          Mode
+          <select id="sel-mode">
+            <option value="fick" selected>Fick Diffusion</option>
+            <option value="cahn-hilliard">Spinodal Decomposition</option>
+            <option value="grain-growth">Grain Growth</option>
           </select>
         </label>
 
-        <label>
-          Temperature: <span id="val-temperature">873</span> K
-          <input id="sl-temperature" type="range" min="300" max="1500" value="873" step="1" />
-        </label>
+        <!-- Fick-specific controls -->
+        <div id="fick-controls">
+          <h3>Material System</h3>
+          <label>
+            Material pair
+            <select id="sel-material">
+              <option value="Cu-in-Al" selected>Cu in Al</option>
+              <option value="Al-self">Al (self-diffusion)</option>
+              <option value="C-in-gFe">C in &gamma;-Fe</option>
+              <option value="Ni-in-Cu">Ni in Cu</option>
+            </select>
+          </label>
+
+          <label>
+            Temperature: <span id="val-temperature">873</span> K
+            <input id="sl-temperature" type="range" min="300" max="1500" value="873" step="1" />
+          </label>
+        </div>
+
+        <!-- Cahn-Hilliard-specific controls -->
+        <div id="ch-controls" hidden>
+          <h3>Spinodal Parameters</h3>
+          <label>
+            Mobility M: <span id="val-ch-mobility">1.0</span>
+            <input id="sl-ch-mobility" type="range" min="0.1" max="5" value="1" step="0.1" />
+          </label>
+          <label>
+            Epsilon &epsilon;: <span id="val-ch-epsilon">0.5</span>
+            <input id="sl-ch-epsilon" type="range" min="0.1" max="3" value="0.5" step="0.1" />
+          </label>
+          <label>
+            Barrier A: <span id="val-ch-barrier">1.0</span>
+            <input id="sl-ch-barrier" type="range" min="0.1" max="5" value="1" step="0.1" />
+          </label>
+          <label>
+            Mean &phi;: <span id="val-ch-mean">0.50</span>
+            <input id="sl-ch-mean" type="range" min="0.1" max="0.9" value="0.5" step="0.01" />
+          </label>
+        </div>
+
+        <!-- Grain Growth-specific controls -->
+        <div id="gg-controls" hidden>
+          <h3>Grain Growth Parameters</h3>
+          <label>
+            Kinetic L: <span id="val-gg-L">1.0</span>
+            <input id="sl-gg-L" type="range" min="0.1" max="5" value="1" step="0.1" />
+          </label>
+          <label>
+            Kappa &kappa;: <span id="val-gg-kappa">0.5</span>
+            <input id="sl-gg-kappa" type="range" min="0.1" max="3" value="0.5" step="0.1" />
+          </label>
+          <label>
+            Grains
+            <select id="sel-gg-grains">
+              <option value="4">4</option>
+              <option value="8" selected>8</option>
+              <option value="12">12</option>
+              <option value="16">16</option>
+            </select>
+          </label>
+        </div>
 
         <h3>Domain</h3>
         <label>
@@ -68,7 +124,7 @@
         </label>
 
         <h3>Initial Condition</h3>
-        <label>
+        <label id="lbl-image-upload">
           Upload grayscale image
           <input id="inp-image" type="file" accept="image/*" />
         </label>
@@ -77,6 +133,7 @@
       <div id="info-panel">
         <h3>Simulation Info</h3>
         <table>
+          <tr><td>Mode</td><td id="info-mode">Fick</td></tr>
           <tr><td>D(T)</td><td id="info-D">—</td></tr>
           <tr><td>dt</td><td id="info-dt">—</td></tr>
           <tr><td>dx</td><td id="info-dx">—</td></tr>

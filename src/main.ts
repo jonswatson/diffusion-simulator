@@ -1,5 +1,5 @@
 import './style.css';
-import { Solver, MATERIALS } from './engine';
+import { Solver, MATERIALS, CahnHilliardSolver, GrainGrowthSolver } from './engine';
 import { generateDefaultField } from './app/imageLoader';
 import { createLoop } from './app/loop';
 import { initUI } from './app/ui';
@@ -40,15 +40,15 @@ async function main(): Promise<void> {
     const device = await initGPU();
 
     const canvas = document.getElementById('sim-canvas') as HTMLCanvasElement;
-    const context = canvas.getContext('webgpu')!;
+    const gpuContext = canvas.getContext('webgpu')!;
     const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format: canvasFormat });
+    gpuContext.configure({ device, format: canvasFormat });
 
     const W = canvas.width;
     const H = canvas.height;
-    const solver = new Solver({ device, context, canvasFormat, width: W, height: H });
+    const solver = new Solver({ device, context: gpuContext, canvasFormat, width: W, height: H });
 
-    // Configure physics: Cu-in-Al at 873K (600°C), 100µm domain
+    // Configure physics: Cu-in-Al at 873K (600 C), 100 um domain
     const material = MATERIALS['Cu-in-Al'];
     solver.updateConfig({
       material,
@@ -68,37 +68,30 @@ async function main(): Promise<void> {
     // Create the simulation loop
     const loop = createLoop(solver, (info) => onFrame(info));
 
-    // UIContext is a mutable ref — recreateEngine updates ctx.solver so
-    // all UI closures see the new engine without being re-wired.
+    // UIContext — the ui module owns engine recreation now
     const ctx: UIContext = {
       solver,
       loop,
       canvas,
-      recreateEngine: async (gridWidth: number) => {
-        canvas.width = gridWidth;
-        canvas.height = gridWidth;
-        context.configure({ device, format: canvasFormat });
-        const newSolver = new Solver({ device, context, canvasFormat, width: gridWidth, height: gridWidth });
-        ctx.solver = newSolver;
-        loop.setEngine(newSolver);
-
-        if (import.meta.env.DEV) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (window as any).__sim = { device, engine: newSolver, loop };
-        }
-      },
+      device,
+      context: gpuContext,
+      canvasFormat,
     };
 
     // Wire up UI controls
     onFrame = initUI(ctx);
 
     console.log('GPU ready:', device.label);
-    console.log(`Grid: ${W}×${H}, canvas format: ${canvasFormat}`);
+    console.log(`Grid: ${W}x${H}, canvas format: ${canvasFormat}`);
 
     // Expose for Playwright E2E tests (stripped from production builds)
     if (import.meta.env.DEV) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).__sim = { device, engine: solver, loop };
+      (window as any).__sim = {
+        device, engine: solver, loop,
+        CahnHilliardSolver, GrainGrowthSolver,
+        canvasFormat, context: gpuContext,
+      };
     }
   } catch (err) {
     showError(err instanceof Error ? err.message : String(err));

@@ -48,9 +48,50 @@ export const MATERIALS: Record<string, Material> = {
   },
 };
 
+/** Fick's 2nd law: requires a real material + temperature for Arrhenius D(T). */
+export interface FickConfig {
+  mode: 'fick';
+  material: Material;
+  temperature_K: number; // Kelvin
+  domainSize_m: number;  // meters — physical width of the simulation domain
+  gridWidth: number;     // pixels (square grid)
+}
+
+/**
+ * Cahn-Hilliard spinodal decomposition.
+ * All parameters are dimensionless (normalized to grid spacing / timestep).
+ */
+export interface CahnHilliardConfig {
+  mode: 'cahn-hilliard';
+  mobility: number;       // dimensionless mobility M
+  epsilon: number;        // gradient energy coefficient (grid units)
+  barrierHeight: number;  // double-well depth A: f(φ) = A·φ²·(1−φ)²
+  domainSize_m: number;   // meters (for display / dx calc)
+  gridWidth: number;      // pixels (square grid)
+}
+
+/**
+ * Allen-Cahn multi-order-parameter grain growth.
+ * Dimensionless parameters for educational clarity.
+ */
+export interface GrainGrowthConfig {
+  mode: 'grain-growth';
+  kinetic_L: number;      // dimensionless kinetic coefficient
+  kappa: number;           // gradient energy coefficient
+  barrierA: number;        // same-phase well depth
+  crossB: number;          // cross-coupling strength between grains
+  numGrains: number;       // 4–16
+  domainSize_m: number;    // meters (for display / dx calc)
+  gridWidth: number;       // pixels (square grid)
+}
+
+/** Legacy SimConfig for backward compatibility with Fick-only code. */
 export interface SimConfig {
   material: Material;
   temperature_K: number; // Kelvin
   domainSize_m: number;  // meters — physical width of the simulation domain
   gridWidth: number;     // pixels (square grid for MVP)
 }
+
+/** Union of all mode-specific configs. */
+export type ModeConfig = FickConfig | CahnHilliardConfig | GrainGrowthConfig;

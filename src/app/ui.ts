@@ -1,22 +1,31 @@
 // ============================================================
 // UI wiring — connects DOM controls to the engine and loop.
 //
-// Temperature cascade: T → D(T) → dt → r → writeBuffer
-// Grid/domain change: full engine recreation (new buffers).
-// Material change: update colors + recompute physics.
+// Mode-aware: handles Fick diffusion, Cahn-Hilliard spinodal
+// decomposition, and Allen-Cahn grain growth.
+//
+// Temperature cascade (Fick): T -> D(T) -> dt -> r -> writeBuffer
+// Grid/domain/mode change: full engine recreation (new buffers).
 // ============================================================
 
-import { Solver, MATERIALS } from '../engine';
-import type { SimConfig } from '../engine';
+import {
+  FickSolver, CahnHilliardSolver, GrainGrowthSolver,
+  MATERIALS,
+} from '../engine';
+import type { SimConfig, CahnHilliardConfig, GrainGrowthConfig } from '../engine';
+import type { SimMode, DiffusionEngine } from '../engine/types';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
+import { generateSpinodalField, generateVoronoiField, generateGrainColors } from './initialConditions';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
 
 export interface UIContext {
-  solver: Solver;
+  solver: DiffusionEngine;
   loop: Loop;
   canvas: HTMLCanvasElement;
-  recreateEngine: (gridWidth: number) => Promise<void>;
+  device: GPUDevice;
+  context: GPUCanvasContext;
+  canvasFormat: GPUTextureFormat;
 }
 
 export type FrameCallback = (info: { time: number; stepsRun: number; fps: number }) => void;
@@ -40,13 +49,41 @@ function formatTime(seconds: number): string {
 export function initUI(ctx: UIContext): FrameCallback {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-  // DOM elements
+  // DOM elements — transport
   const btnPlay = $<HTMLButtonElement>('btn-play');
   const btnPause = $<HTMLButtonElement>('btn-pause');
   const btnReset = $<HTMLButtonElement>('btn-reset');
+
+  // Mode selector
+  const selMode = $<HTMLSelectElement>('sel-mode');
+  const fickControls = $<HTMLDivElement>('fick-controls');
+  const chControls = $<HTMLDivElement>('ch-controls');
+  const ggControls = $<HTMLDivElement>('gg-controls');
+  const lblImageUpload = $<HTMLLabelElement>('lbl-image-upload');
+
+  // Fick-specific
   const selMaterial = $<HTMLSelectElement>('sel-material');
   const slTemperature = $<HTMLInputElement>('sl-temperature');
   const valTemperature = $<HTMLSpanElement>('val-temperature');
+
+  // Cahn-Hilliard-specific
+  const slCHMobility = $<HTMLInputElement>('sl-ch-mobility');
+  const valCHMobility = $<HTMLSpanElement>('val-ch-mobility');
+  const slCHEpsilon = $<HTMLInputElement>('sl-ch-epsilon');
+  const valCHEpsilon = $<HTMLSpanElement>('val-ch-epsilon');
+  const slCHBarrier = $<HTMLInputElement>('sl-ch-barrier');
+  const valCHBarrier = $<HTMLSpanElement>('val-ch-barrier');
+  const slCHMean = $<HTMLInputElement>('sl-ch-mean');
+  const valCHMean = $<HTMLSpanElement>('val-ch-mean');
+
+  // Grain Growth-specific
+  const slGGL = $<HTMLInputElement>('sl-gg-L');
+  const valGGL = $<HTMLSpanElement>('val-gg-L');
+  const slGGKappa = $<HTMLInputElement>('sl-gg-kappa');
+  const valGGKappa = $<HTMLSpanElement>('val-gg-kappa');
+  const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
+
+  // Domain / grid
   const selDomain = $<HTMLSelectElement>('sel-domain');
   const selGrid = $<HTMLSelectElement>('sel-grid');
   const slSpeed = $<HTMLInputElement>('sl-speed');
@@ -54,6 +91,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   const inpImage = $<HTMLInputElement>('inp-image');
 
   // Info readouts
+  const infoMode = $('info-mode');
   const infoD = $('info-D');
   const infoDt = $('info-dt');
   const infoDx = $('info-dx');
@@ -69,13 +107,44 @@ export function initUI(ctx: UIContext): FrameCallback {
   let validation = createValidation();
 
   // Current config state
+  let currentMode: SimMode = 'fick';
   let currentMaterialKey = selMaterial.value;
   let currentTemperature = parseInt(slTemperature.value, 10);
   let currentDomainSize = parseFloat(selDomain.value);
   let currentGridWidth = parseInt(selGrid.value, 10);
 
-  /** Build a SimConfig from current UI state. */
-  function makeConfig(): SimConfig {
+  // ---- Engine factory ----
+
+  /** Create a new solver for the given mode and grid width. */
+  function createEngine(mode: SimMode, gridWidth: number): DiffusionEngine {
+    const base = { device: ctx.device, context: ctx.context, canvasFormat: ctx.canvasFormat, width: gridWidth, height: gridWidth };
+    switch (mode) {
+      case 'fick':
+        return new FickSolver(base);
+      case 'cahn-hilliard':
+        return new CahnHilliardSolver(base);
+      case 'grain-growth': {
+        const numGrains = parseInt(selGGGrains.value, 10);
+        return new GrainGrowthSolver({ ...base, numGrains });
+      }
+    }
+  }
+
+  /** Destroy the old solver, create a new one, and wire it into the loop. */
+  function recreateEngine(mode: SimMode, gridWidth: number): void {
+    ctx.solver.destroy();
+    ctx.canvas.width = gridWidth;
+    ctx.canvas.height = gridWidth;
+    ctx.context.configure({ device: ctx.device, format: ctx.canvasFormat });
+    const newSolver = createEngine(mode, gridWidth);
+    ctx.solver = newSolver;
+    ctx.loop.setEngine(newSolver);
+  }
+
+  // ---- Mode-aware config & field ----
+
+  /** Build a Fick SimConfig from current UI state. */
+  function makeFickConfig(): SimConfig {
     return {
       material: MATERIALS[currentMaterialKey],
       temperature_K: currentTemperature,
@@ -84,40 +153,103 @@ export function initUI(ctx: UIContext): FrameCallback {
     };
   }
 
+  /** Build a CH config from current UI state. */
+  function makeCHConfig(): CahnHilliardConfig {
+    return {
+      mode: 'cahn-hilliard',
+      mobility: parseFloat(slCHMobility.value),
+      epsilon: parseFloat(slCHEpsilon.value),
+      barrierHeight: parseFloat(slCHBarrier.value),
+      domainSize_m: currentGridWidth, // dimensionless: dx = 1
+      gridWidth: currentGridWidth,
+    };
+  }
+
+  /** Build a GG config from current UI state. */
+  function makeGGConfig(): GrainGrowthConfig {
+    return {
+      mode: 'grain-growth',
+      kinetic_L: parseFloat(slGGL.value),
+      kappa: parseFloat(slGGKappa.value),
+      barrierA: 1.0,
+      crossB: 1.0,
+      numGrains: parseInt(selGGGrains.value, 10),
+      domainSize_m: currentGridWidth, // dimensionless: dx = 1
+      gridWidth: currentGridWidth,
+    };
+  }
+
   /** Get the "base" color for material A (solvent). */
   function getColorA(materialKey: string): [number, number, number] {
-    // Use a neutral/light color for the matrix/solvent
     const map: Record<string, [number, number, number]> = {
-      'Cu-in-Al': [0.75, 0.75, 0.82],  // aluminium silver
-      'Al-self':  [0.75, 0.75, 0.82],  // aluminium silver
-      'C-in-gFe': [0.65, 0.65, 0.70],  // iron grey
-      'Ni-in-Cu': [0.72, 0.45, 0.20],  // copper
+      'Cu-in-Al': [0.75, 0.75, 0.82],
+      'Al-self':  [0.75, 0.75, 0.82],
+      'C-in-gFe': [0.65, 0.65, 0.70],
+      'Ni-in-Cu': [0.72, 0.45, 0.20],
     };
     return map[materialKey] ?? [0.8, 0.8, 0.8];
   }
 
-  /** Update physics + GPU from current config. Does NOT reload field. */
+  /** Apply physics config to the current solver. Mode-aware. */
   function applyConfig(): void {
-    const config = makeConfig();
-    ctx.solver.updateConfig(config);
-    const mat = MATERIALS[currentMaterialKey];
-    ctx.solver.updateMaterialColors(getColorA(currentMaterialKey), mat.color);
-    updateWarnings(config);
+    switch (currentMode) {
+      case 'fick': {
+        const config = makeFickConfig();
+        (ctx.solver as FickSolver).updateConfig(config);
+        const mat = MATERIALS[currentMaterialKey];
+        ctx.solver.updateMaterialColors(getColorA(currentMaterialKey), mat.color);
+        updateWarnings(config);
+        break;
+      }
+      case 'cahn-hilliard': {
+        const config = makeCHConfig();
+        (ctx.solver as CahnHilliardSolver).updateCHConfig(config);
+        ctx.solver.updateMaterialColors([0.05, 0.05, 0.3], [1.0, 0.9, 0.2]);
+        warningsDiv.innerHTML = '';
+        break;
+      }
+      case 'grain-growth': {
+        const config = makeGGConfig();
+        (ctx.solver as GrainGrowthSolver).updateGGConfig(config);
+        warningsDiv.innerHTML = '';
+        break;
+      }
+    }
   }
 
-  /** Reload the default field and reset simulation. */
+  /** Reload the default field for the current mode and reset simulation. */
   function resetField(): void {
     const wasPlaying = ctx.loop.playing;
     if (wasPlaying) ctx.loop.pause();
-    const field = generateDefaultField(currentGridWidth) as Float32Array<ArrayBuffer>;
-    ctx.solver.loadField(field);
-    // Record initial mass for conservation checking
+
+    let field: Float32Array;
+    switch (currentMode) {
+      case 'fick':
+        field = generateDefaultField(currentGridWidth);
+        break;
+      case 'cahn-hilliard': {
+        const meanPhi = parseFloat(slCHMean.value);
+        field = generateSpinodalField(currentGridWidth, meanPhi, 0.05);
+        break;
+      }
+      case 'grain-growth': {
+        const numGrains = parseInt(selGGGrains.value, 10);
+        field = generateVoronoiField(currentGridWidth, numGrains);
+        // Also set grain colors
+        const colors = generateGrainColors(numGrains) as Float32Array<ArrayBuffer>;
+        (ctx.solver as GrainGrowthSolver).setGrainColors(colors);
+        break;
+      }
+    }
+
+    ctx.solver.loadField(field as Float32Array<ArrayBuffer>);
     validation = createValidation();
     validation.initialMass = fieldSum(field);
+
     if (wasPlaying) ctx.loop.play();
   }
 
-  /** Check for warning conditions. */
+  /** Check for warning conditions (Fick only). */
   function updateWarnings(config: SimConfig): void {
     const warnings: string[] = [];
     const mat = config.material;
@@ -126,7 +258,7 @@ export function initUI(ctx: UIContext): FrameCallback {
     if (T < mat.T_min || T > mat.T_max) {
       warnings.push(
         `Temperature ${T} K is outside the validated range ` +
-        `(${mat.T_min}–${mat.T_max} K) for ${mat.name}.`
+        `(${mat.T_min}\u2013${mat.T_max} K) for ${mat.name}.`
       );
     }
 
@@ -138,12 +270,30 @@ export function initUI(ctx: UIContext): FrameCallback {
     const dx_px = config.domainSize_m / config.gridWidth;
     const interfaceWidth_px = 2 * Math.sqrt(state.diffusivity * Math.max(state.time, 1)) / dx_px;
     if (interfaceWidth_px < 2 && state.time > 0) {
-      warnings.push('Interface width < 2 pixels — increase grid resolution or domain size.');
+      warnings.push('Interface width < 2 pixels \u2014 increase grid resolution or domain size.');
     }
 
     warningsDiv.innerHTML = warnings
       .map(w => `<div class="warning">${w}</div>`)
       .join('');
+  }
+
+  /** Show/hide mode-specific control sections. */
+  function updateModeVisibility(): void {
+    fickControls.hidden = currentMode !== 'fick';
+    chControls.hidden = currentMode !== 'cahn-hilliard';
+    ggControls.hidden = currentMode !== 'grain-growth';
+    // Image upload is only useful for Fick
+    lblImageUpload.hidden = currentMode !== 'fick';
+  }
+
+  /** Mode display name for the info panel. */
+  function modeName(mode: SimMode): string {
+    switch (mode) {
+      case 'fick': return 'Fick';
+      case 'cahn-hilliard': return 'Spinodal';
+      case 'grain-growth': return 'Grain Growth';
+    }
   }
 
   // ---- Play / Pause / Reset ----
@@ -166,17 +316,76 @@ export function initUI(ctx: UIContext): FrameCallback {
     resetField();
   });
 
-  // ---- Material ----
+  // ---- Mode selector ----
+  selMode.addEventListener('change', () => {
+    const wasPlaying = ctx.loop.playing;
+    if (wasPlaying) ctx.loop.pause();
+
+    currentMode = selMode.value as SimMode;
+    updateModeVisibility();
+    recreateEngine(currentMode, currentGridWidth);
+    applyConfig();
+    resetField();
+
+    if (wasPlaying) {
+      ctx.loop.play();
+      btnPlay.disabled = true;
+      btnPause.disabled = false;
+    }
+  });
+
+  // ---- Material (Fick) ----
   selMaterial.addEventListener('change', () => {
     currentMaterialKey = selMaterial.value;
     applyConfig();
   });
 
-  // ---- Temperature ----
+  // ---- Temperature (Fick) ----
   slTemperature.addEventListener('input', () => {
     currentTemperature = parseInt(slTemperature.value, 10);
     valTemperature.textContent = String(currentTemperature);
     applyConfig();
+  });
+
+  // ---- CH sliders ----
+  slCHMobility.addEventListener('input', () => {
+    valCHMobility.textContent = parseFloat(slCHMobility.value).toFixed(1);
+    applyConfig();
+  });
+  slCHEpsilon.addEventListener('input', () => {
+    valCHEpsilon.textContent = parseFloat(slCHEpsilon.value).toFixed(1);
+    applyConfig();
+  });
+  slCHBarrier.addEventListener('input', () => {
+    valCHBarrier.textContent = parseFloat(slCHBarrier.value).toFixed(1);
+    applyConfig();
+  });
+  slCHMean.addEventListener('input', () => {
+    valCHMean.textContent = parseFloat(slCHMean.value).toFixed(2);
+    // Mean phi only affects the IC, not the running sim config
+  });
+
+  // ---- GG sliders ----
+  slGGL.addEventListener('input', () => {
+    valGGL.textContent = parseFloat(slGGL.value).toFixed(1);
+    applyConfig();
+  });
+  slGGKappa.addEventListener('input', () => {
+    valGGKappa.textContent = parseFloat(slGGKappa.value).toFixed(1);
+    applyConfig();
+  });
+  selGGGrains.addEventListener('change', () => {
+    // Changing grain count requires engine recreation (buffer size changes)
+    const wasPlaying = ctx.loop.playing;
+    if (wasPlaying) ctx.loop.pause();
+    recreateEngine('grain-growth', currentGridWidth);
+    applyConfig();
+    resetField();
+    if (wasPlaying) {
+      ctx.loop.play();
+      btnPlay.disabled = true;
+      btnPause.disabled = false;
+    }
   });
 
   // ---- Domain size ----
@@ -187,12 +396,12 @@ export function initUI(ctx: UIContext): FrameCallback {
   });
 
   // ---- Grid resolution (requires engine recreation) ----
-  selGrid.addEventListener('change', async () => {
+  selGrid.addEventListener('change', () => {
     const wasPlaying = ctx.loop.playing;
     if (wasPlaying) ctx.loop.pause();
 
     currentGridWidth = parseInt(selGrid.value, 10);
-    await ctx.recreateEngine(currentGridWidth);
+    recreateEngine(currentMode, currentGridWidth);
     applyConfig();
     resetField();
 
@@ -213,8 +422,9 @@ export function initUI(ctx: UIContext): FrameCallback {
   slSpeed.addEventListener('input', updateSpeed);
   updateSpeed(); // set initial
 
-  // ---- Image upload ----
+  // ---- Image upload (Fick only) ----
   inpImage.addEventListener('change', async () => {
+    if (currentMode !== 'fick') return;
     const file = inpImage.files?.[0];
     if (!file) return;
 
@@ -235,13 +445,27 @@ export function initUI(ctx: UIContext): FrameCallback {
     validation.initialMass = fieldSum(initField);
   }
 
+  // Set initial mode visibility
+  updateModeVisibility();
+
   // Return the per-frame callback for the loop to call
   return (info) => {
     const state = ctx.solver.state;
-    infoD.textContent = `${sci(state.diffusivity)} m²/s`;
+
+    // Mode name
+    infoMode.textContent = modeName(currentMode);
+
+    // D(T) and r are only meaningful for Fick
+    if (currentMode === 'fick') {
+      infoD.textContent = `${sci(state.diffusivity)} m\u00B2/s`;
+      infoR.textContent = state.r.toFixed(4);
+    } else {
+      infoD.textContent = '\u2014';
+      infoR.textContent = '\u2014';
+    }
+
     infoDt.textContent = `${sci(state.dt)} s`;
     infoDx.textContent = `${sci(state.dx)} m`;
-    infoR.textContent = state.r.toFixed(4);
     infoTime.textContent = formatTime(state.time);
     infoSteps.textContent = info.stepsRun.toLocaleString();
     infoFps.textContent = `${info.fps.toFixed(0)}`;
@@ -249,14 +473,20 @@ export function initUI(ctx: UIContext): FrameCallback {
     // Validation readouts
     infoMassError.textContent = validation.lastMassError > 0
       ? `${(validation.lastMassError * 100).toFixed(4)}%`
-      : '—';
-    infoRmsError.textContent = validation.lastAnalyticalRMS > 0
-      ? `${(validation.lastAnalyticalRMS * 100).toFixed(2)}%`
-      : '—';
+      : '\u2014';
+
+    // RMS vs erfc is only valid for Fick mode
+    if (currentMode === 'fick') {
+      infoRmsError.textContent = validation.lastAnalyticalRMS > 0
+        ? `${(validation.lastAnalyticalRMS * 100).toFixed(2)}%`
+        : '\u2014';
+    } else {
+      infoRmsError.textContent = '\u2014';
+    }
 
     // Run async validation checks (throttled internally)
     if (state.stepsRun > 0) {
-      runValidationChecks(validation, ctx.solver, currentGridWidth);
+      runValidationChecks(validation, ctx.solver, currentGridWidth, currentMode);
     }
   };
 }

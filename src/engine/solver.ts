@@ -1,5 +1,5 @@
 // ============================================================
-// GPU pipeline orchestration for the diffusion engine.
+// GPU pipeline orchestration for the Fick diffusion engine.
 //
 // Manages compute + render pipelines, ping-pong buffers, and
 // the per-frame command encoding. The solver never touches the DOM.
@@ -8,8 +8,11 @@
 import { createFieldBuffer, createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
 import { arrheniusDiffusivity, computeDx, computeDt, fourierNumber } from './physics';
 import type { SimConfig } from './materials';
+import type { DiffusionEngine, SimMode, EngineState } from './types';
 import diffusionWGSL from './shaders/diffusion.wgsl?raw';
 import renderWGSL from './shaders/render.wgsl?raw';
+
+export type { EngineState } from './types';
 
 export interface SolverConfig {
   device: GPUDevice;
@@ -19,17 +22,8 @@ export interface SolverConfig {
   height: number;
 }
 
-/** CPU-side simulation state. No GPU readback needed. */
-export interface EngineState {
-  time: number;         // seconds simulated (f64 precision)
-  diffusivity: number;  // m²/s — D(T)
-  dx: number;           // m/pixel
-  dt: number;           // seconds/step
-  r: number;            // Fourier number ≈ 0.1
-  stepsRun: number;
-}
-
-export class Solver {
+export class FickSolver implements DiffusionEngine {
+  readonly mode: SimMode = 'fick';
   readonly device: GPUDevice;
   private context: GPUCanvasContext;
   private width: number;
@@ -281,4 +275,15 @@ export class Solver {
       ],
     });
   }
+
+  /** Release all GPU resources held by this solver. */
+  destroy(): void {
+    this.bufA.destroy();
+    this.bufB.destroy();
+    this.uniformBuffer.destroy();
+    this.materialColorBuffer.destroy();
+  }
 }
+
+/** Backward-compatible alias — existing code can keep using `Solver`. */
+export { FickSolver as Solver };

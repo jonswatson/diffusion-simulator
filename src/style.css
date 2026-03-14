@@ -92,6 +92,11 @@ body {
   margin-bottom: 8px;
 }
 
+/* Ensure hidden attribute works even on elements with explicit display rules */
+[hidden] {
+  display: none !important;
+}
+
 #ui-panel select, #ui-panel input[type="file"] {
   display: block;
   width: 100%;

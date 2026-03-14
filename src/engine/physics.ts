@@ -70,6 +70,44 @@ export function analyticalConcentration(x_m: number, x0_m: number, D: number, t:
   return 0.5 * erfcApprox((x_m - x0_m) / (2.0 * Math.sqrt(D * t)));
 }
 
+/**
+ * Maximum stable timestep for explicit FTCS Cahn-Hilliard (split form).
+ *
+ * The effective CFL for the biharmonic ∇⁴ term scales as dx⁴, making
+ * stability very restrictive. The split two-pass scheme introduces an
+ * effective diffusivity ~ M·ε² for the highest-order term.
+ *
+ * dt ≤ safetyFactor · dx⁴ / (M · ε² · 16)
+ * where the '16' accounts for the 2D Laplacian applied twice.
+ */
+export function computeCHDt(
+  M: number, epsilon: number, A: number, dx: number, safetyFactor = 0.05,
+): number {
+  const dx2 = dx * dx;
+  const dx4 = dx2 * dx2;
+  // Biharmonic limit (dominant when ε is large)
+  const dtBiharmonic = dx4 / (16.0 * M * epsilon * epsilon);
+  // Reaction-diffusion limit from the double-well term
+  const dtReaction = dx2 / (4.0 * M * 2.0 * A);
+  return safetyFactor * Math.min(dtBiharmonic, dtReaction);
+}
+
+/**
+ * Maximum stable timestep for explicit FTCS Allen-Cahn (grain growth).
+ *
+ * Allen-Cahn has two competing stability constraints:
+ *   1. Diffusive: dt ≤ dx² / (4·L·κ) — from κ·∇²η
+ *   2. Reactive:  dt ≤ 1 / (L·2A) — from the double-well derivative
+ * Take the minimum and apply a safety factor.
+ */
+export function computeGGDt(
+  L: number, kappa: number, A: number, dx: number, safetyFactor = 0.2,
+): number {
+  const dtDiffusion = (dx * dx) / (4.0 * L * kappa);
+  const dtReaction = 1.0 / (L * 2.0 * A);
+  return safetyFactor * Math.min(dtDiffusion, dtReaction);
+}
+
 // ============================================================
 // Extension path: Cahn–Hilliard phase field model
 //

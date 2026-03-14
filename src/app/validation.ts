@@ -3,9 +3,10 @@
 //
 // Mass conservation: sum concentration at load, compare periodically.
 // Analytical validation: midline erfc comparison for 1D step IC.
+// Mode-aware: analytical check only for Fick mode.
 // ============================================================
 
-import type { Solver, EngineState } from '../engine/solver';
+import type { DiffusionEngine, EngineState, SimMode } from '../engine/types';
 import { analyticalConcentration } from '../engine/physics';
 
 export interface ValidationState {
@@ -60,14 +61,16 @@ export function createValidation(): ValidationState {
 
 /**
  * Run periodic validation checks. Call every frame; internally throttles
- * to only check every 100 steps (mass) or 500 steps (analytical).
+ * to only check every 500 steps.
  *
  * The readField callback is async (GPU readback) so this returns a promise.
+ * Mode parameter controls whether analytical (erfc) comparison is run.
  */
 export async function runValidationChecks(
   validation: ValidationState,
-  solver: Solver,
+  solver: DiffusionEngine,
   gridWidth: number,
+  mode: SimMode = 'fick',
 ): Promise<void> {
   const state = solver.state;
   const stepsSinceCheck = state.stepsRun - validation.lastCheckStep;
@@ -79,14 +82,24 @@ export async function runValidationChecks(
 
   const field = await solver.readField();
 
-  // Mass conservation
-  const currentMass = fieldSum(field);
-  if (validation.initialMass > 0) {
-    validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+  // Mass conservation (applies to all modes, but for GG use first W*H slice)
+  if (mode === 'grain-growth') {
+    // For grain growth, mass check on the first eta slice (informational)
+    const sliceLen = gridWidth * gridWidth;
+    const slice = field.subarray(0, sliceLen);
+    const currentMass = fieldSum(slice);
+    if (validation.initialMass > 0) {
+      validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+    }
+  } else {
+    const currentMass = fieldSum(field);
+    if (validation.initialMass > 0) {
+      validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+    }
   }
 
-  // Analytical comparison (only valid for default step-function IC)
-  if (state.time > 0) {
+  // Analytical comparison (only valid for Fick default step-function IC)
+  if (mode === 'fick' && state.time > 0) {
     validation.lastAnalyticalRMS = midlineRMSError(field, gridWidth, state);
   }
 }
