@@ -10,7 +10,7 @@
 // ============================================================
 
 import { createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
-import { computeGGDt, computeDx } from './physics';
+import { R_GAS, computeGGDt, computeDx, kappaFromInterfaceWidth } from './physics';
 import type { DiffusionEngine, SimMode, EngineState } from './types';
 import type { GrainGrowthConfig } from './materials';
 import grainWGSL from './shaders/grainGrowth.wgsl?raw';
@@ -164,17 +164,32 @@ export class GrainGrowthSolver implements DiffusionEngine {
     this.renderBindGroup = this.makeRenderBindGroup();
   }
 
-  /** Apply physics parameters from a grain growth config. */
+  /**
+   * Apply physics parameters from a grain growth config.
+   * Computes κ from interface width (fixes the under-resolved boundary bug)
+   * and L(T) from Arrhenius scaling.
+   */
   updateGGConfig(config: GrainGrowthConfig): void {
     const dx = computeDx(config.domainSize_m, config.gridWidth);
-    const dt = computeGGDt(config.kinetic_L, config.kappa, config.barrierA, dx);
+
+    // Compute κ from interface width — THIS IS THE KEY FIX
+    // With ξ=6 px and A=1: κ = 36 → well-resolved interface
+    // (Previously κ=0.5 gave ξ=0.71 px — sub-pixel, unresolvable)
+    const kappa = kappaFromInterfaceWidth(config.interfaceWidth_px, config.barrierA);
+
+    // L(T) via Arrhenius, normalized to T_ref = 800 K
+    const T_ref = 800;
+    const L = Math.exp(-config.material.Q_gb / (R_GAS * config.temperature_K))
+            / Math.exp(-config.material.Q_gb / (R_GAS * T_ref));
+
+    const dt = computeGGDt(L, kappa, config.barrierA, dx);
 
     this._state.dx = dx;
     this._state.dt = dt;
-    this._state.diffusivity = config.kinetic_L; // informational
+    this._state.diffusivity = L; // informational
     this._state.r = 0;
 
-    this.writeUniforms(dx, dt, config.kinetic_L, config.kappa, config.barrierA, config.crossB, config.numGrains);
+    this.writeUniforms(dx, dt, L, kappa, config.barrierA, config.crossB, config.numGrains);
   }
 
   private writeUniforms(

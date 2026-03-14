@@ -4,16 +4,19 @@
 // Split form of the Cahn-Hilliard equation:
 //   μ = f'(φ) − ε²·∇²φ
 //
-// where:
-//   f(φ) = A·φ²·(1−φ)²               (double-well free energy)
-//   f'(φ) = 2A·φ·(1−φ)·(1−2φ)        (chemical potential from bulk)
-//   ε²·∇²φ                            (gradient energy, penalizes interfaces)
+// Regular solution free energy:
+//   f(φ) = Ω·φ·(1−φ) + RT·[φ·ln(φ) + (1−φ)·ln(1−φ)]
+//   f'(φ) = Ω·(1−2φ) + RT·ln(φ/(1−φ))
 //
+// In dimensionless form (dividing by RT):
+//   f'(φ) = Ω_d·(1−2φ) + ln(φ/(1−φ))
+// where Ω_d = Ω/(RT). Spinodal instability when Ω_d > 2.
+//
+// The gradient term ε²·∇²φ penalizes interfaces.
 // This pass reads the composition field and writes the chemical potential.
 // The second pass (cahnHilliardPhi.wgsl) then advances φ via ∇²μ.
 //
 // Boundary: zero-flux Neumann (clamped indices)
-// Units: all dimensionless (normalized for educational use)
 // ============================================================
 
 struct Uniforms {
@@ -21,10 +24,10 @@ struct Uniforms {
   height     : u32,
   dt         : f32,
   dx         : f32,
-  M          : f32,   // mobility
+  M          : f32,   // mobility (dimensionless, Arrhenius-scaled)
   epsilon_sq : f32,   // ε² — gradient energy coefficient
-  A          : f32,   // barrier height in double-well
-  _pad       : u32,
+  Omega      : f32,   // dimensionless Ω/RT — regular solution parameter
+  RT         : f32,   // dimensionless (= 1.0) — for clarity in f'(φ)
 }
 
 @group(0) @binding(0) var<uniform>             uniforms : Uniforms;
@@ -54,8 +57,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
               + phi_in[idx(x, yp)] + phi_in[idx(x, ym)]
               - 4.0 * phi) / (uniforms.dx * uniforms.dx);
 
-  // f'(φ) = 2A · φ · (1−φ) · (1−2φ)
-  let f_prime = 2.0 * uniforms.A * phi * (1.0 - phi) * (1.0 - 2.0 * phi);
+  // Clamp φ away from 0 and 1 to avoid log(0) singularity
+  let phi_c = clamp(phi, 1e-6, 1.0 - 1e-6);
+
+  // f'(φ) = Ω_d·(1−2φ) + RT_d·ln(φ/(1−φ))   (regular solution)
+  let f_prime = uniforms.Omega * (1.0 - 2.0 * phi_c)
+              + uniforms.RT * log(phi_c / (1.0 - phi_c));
 
   // μ = f'(φ) − ε²·∇²φ
   mu_out[idx(x, y)] = f_prime - uniforms.epsilon_sq * lap_phi;

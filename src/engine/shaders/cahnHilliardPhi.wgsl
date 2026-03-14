@@ -9,7 +9,6 @@
 //   φ_new = φ_old + M·dt·∇²μ
 //
 // Boundary: zero-flux Neumann (clamped indices)
-// Units: all dimensionless (normalized for educational use)
 //
 // Stability: dt ≤ safetyFactor · dx⁴ / (16·M·ε²)
 //            for the biharmonic ∇⁴ term from the split scheme.
@@ -22,8 +21,8 @@ struct Uniforms {
   dx         : f32,
   M          : f32,   // mobility
   epsilon_sq : f32,   // (unused in this pass, shared struct)
-  A          : f32,   // (unused in this pass, shared struct)
-  _pad       : u32,
+  Omega      : f32,   // (unused in this pass, shared struct)
+  RT         : f32,   // (unused in this pass, shared struct)
 }
 
 @group(0) @binding(0) var<uniform>             uniforms : Uniforms;

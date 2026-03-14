@@ -8,6 +8,9 @@ import {
   fourierNumber,
   erfcApprox,
   analyticalConcentration,
+  spinodalTemperature,
+  epsilonSqFromInterfaceWidth,
+  kappaFromInterfaceWidth,
   R_GAS,
 } from '../../src/engine/physics';
 
@@ -231,5 +234,60 @@ describe('computeGGDt', () => {
     const dt_safe = computeGGDt(L, kappa, A, dx, 0.1);
     const dt_loose = computeGGDt(L, kappa, A, dx, 0.4);
     expect(dt_loose / dt_safe).toBeCloseTo(4.0, 5);
+  });
+});
+
+describe('spinodalTemperature', () => {
+  it('Al-Zn: Ω = 10 kJ/mol → T_s ≈ 601 K', () => {
+    const Ts = spinodalTemperature(10_000);
+    expect(Ts).toBeCloseTo(10_000 / (2 * R_GAS), 0);
+    expect(Ts).toBeGreaterThan(600);
+    expect(Ts).toBeLessThan(602);
+  });
+
+  it('Fe-Cr: Ω = 20.5 kJ/mol → T_s ≈ 1233 K', () => {
+    const Ts = spinodalTemperature(20_500);
+    expect(Ts).toBeGreaterThan(1230);
+    expect(Ts).toBeLessThan(1235);
+  });
+
+  it('scales linearly with Omega', () => {
+    const T1 = spinodalTemperature(10_000);
+    const T2 = spinodalTemperature(20_000);
+    expect(T2 / T1).toBeCloseTo(2.0, 10);
+  });
+});
+
+describe('epsilonSqFromInterfaceWidth', () => {
+  it('ξ = 6 px, A_eff = 1.0 → ε² = 18.0', () => {
+    expect(epsilonSqFromInterfaceWidth(6, 1.0)).toBeCloseTo(18.0, 10);
+  });
+
+  it('scales with ξ²', () => {
+    const e1 = epsilonSqFromInterfaceWidth(3, 1.0);
+    const e2 = epsilonSqFromInterfaceWidth(6, 1.0);
+    expect(e2 / e1).toBeCloseTo(4.0, 10);
+  });
+
+  it('scales linearly with A_eff', () => {
+    const e1 = epsilonSqFromInterfaceWidth(6, 1.0);
+    const e2 = epsilonSqFromInterfaceWidth(6, 2.0);
+    expect(e2 / e1).toBeCloseTo(2.0, 10);
+  });
+});
+
+describe('kappaFromInterfaceWidth', () => {
+  it('ξ = 6 px, A = 1.0 → κ = 36.0', () => {
+    expect(kappaFromInterfaceWidth(6, 1.0)).toBeCloseTo(36.0, 10);
+  });
+
+  it('default ξ = 0.71 px gives sub-pixel κ (the old bug)', () => {
+    // Old defaults: κ = 0.5, A = 1.0 → ξ = √(0.5/1.0) = 0.707
+    // Now: kappaFromInterfaceWidth(0.707, 1.0) = 0.5
+    expect(kappaFromInterfaceWidth(Math.sqrt(0.5), 1.0)).toBeCloseTo(0.5, 5);
+  });
+
+  it('ξ = 3 px, A = 2.0 → κ = 18.0', () => {
+    expect(kappaFromInterfaceWidth(3, 2.0)).toBeCloseTo(18.0, 10);
   });
 });

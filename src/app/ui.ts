@@ -5,12 +5,13 @@
 // decomposition, and Allen-Cahn grain growth.
 //
 // Temperature cascade (Fick): T -> D(T) -> dt -> r -> writeBuffer
+// CH/GG: material + temperature + interface width → physical params
 // Grid/domain/mode change: full engine recreation (new buffers).
 // ============================================================
 
 import {
   FickSolver, CahnHilliardSolver, GrainGrowthSolver,
-  MATERIALS,
+  MATERIALS, CH_MATERIALS, GG_MATERIALS,
 } from '../engine';
 import type { SimConfig, CahnHilliardConfig, GrainGrowthConfig } from '../engine';
 import type { SimMode, DiffusionEngine } from '../engine/types';
@@ -67,20 +68,21 @@ export function initUI(ctx: UIContext): FrameCallback {
   const valTemperature = $<HTMLSpanElement>('val-temperature');
 
   // Cahn-Hilliard-specific
-  const slCHMobility = $<HTMLInputElement>('sl-ch-mobility');
-  const valCHMobility = $<HTMLSpanElement>('val-ch-mobility');
-  const slCHEpsilon = $<HTMLInputElement>('sl-ch-epsilon');
-  const valCHEpsilon = $<HTMLSpanElement>('val-ch-epsilon');
-  const slCHBarrier = $<HTMLInputElement>('sl-ch-barrier');
-  const valCHBarrier = $<HTMLSpanElement>('val-ch-barrier');
+  const selCHMaterial = $<HTMLSelectElement>('sel-ch-material');
+  const slCHTemp = $<HTMLInputElement>('sl-ch-temp');
+  const valCHTemp = $<HTMLSpanElement>('val-ch-temp');
+  const slCHXi = $<HTMLInputElement>('sl-ch-xi');
+  const valCHXi = $<HTMLSpanElement>('val-ch-xi');
   const slCHMean = $<HTMLInputElement>('sl-ch-mean');
   const valCHMean = $<HTMLSpanElement>('val-ch-mean');
+  const chSpinodalWarning = $<HTMLDivElement>('ch-spinodal-warning');
 
   // Grain Growth-specific
-  const slGGL = $<HTMLInputElement>('sl-gg-L');
-  const valGGL = $<HTMLSpanElement>('val-gg-L');
-  const slGGKappa = $<HTMLInputElement>('sl-gg-kappa');
-  const valGGKappa = $<HTMLSpanElement>('val-gg-kappa');
+  const selGGMaterial = $<HTMLSelectElement>('sel-gg-material');
+  const slGGTemp = $<HTMLInputElement>('sl-gg-temp');
+  const valGGTemp = $<HTMLSpanElement>('val-gg-temp');
+  const slGGXi = $<HTMLInputElement>('sl-gg-xi');
+  const valGGXi = $<HTMLSpanElement>('val-gg-xi');
   const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
 
   // Domain / grid
@@ -157,9 +159,9 @@ export function initUI(ctx: UIContext): FrameCallback {
   function makeCHConfig(): CahnHilliardConfig {
     return {
       mode: 'cahn-hilliard',
-      mobility: parseFloat(slCHMobility.value),
-      epsilon: parseFloat(slCHEpsilon.value),
-      barrierHeight: parseFloat(slCHBarrier.value),
+      material: CH_MATERIALS[selCHMaterial.value],
+      temperature_K: parseInt(slCHTemp.value, 10),
+      interfaceWidth_px: parseInt(slCHXi.value, 10),
       domainSize_m: currentGridWidth, // dimensionless: dx = 1
       gridWidth: currentGridWidth,
     };
@@ -169,8 +171,9 @@ export function initUI(ctx: UIContext): FrameCallback {
   function makeGGConfig(): GrainGrowthConfig {
     return {
       mode: 'grain-growth',
-      kinetic_L: parseFloat(slGGL.value),
-      kappa: parseFloat(slGGKappa.value),
+      material: GG_MATERIALS[selGGMaterial.value],
+      temperature_K: parseInt(slGGTemp.value, 10),
+      interfaceWidth_px: parseInt(slGGXi.value, 10),
       barrierA: 1.0,
       crossB: 1.0,
       numGrains: parseInt(selGGGrains.value, 10),
@@ -190,6 +193,21 @@ export function initUI(ctx: UIContext): FrameCallback {
     return map[materialKey] ?? [0.8, 0.8, 0.8];
   }
 
+  /** Update spinodal warning for CH mode. */
+  function updateCHSpinodalWarning(): void {
+    const mat = CH_MATERIALS[selCHMaterial.value];
+    const T = parseInt(slCHTemp.value, 10);
+    if (T >= mat.T_spinodal) {
+      chSpinodalWarning.hidden = false;
+      chSpinodalWarning.textContent =
+        `T = ${T} K \u2265 T\u209B = ${Math.round(mat.T_spinodal)} K \u2014 ` +
+        `above spinodal temperature, no decomposition will occur.`;
+    } else {
+      chSpinodalWarning.hidden = true;
+      chSpinodalWarning.textContent = '';
+    }
+  }
+
   /** Apply physics config to the current solver. Mode-aware. */
   function applyConfig(): void {
     switch (currentMode) {
@@ -204,7 +222,10 @@ export function initUI(ctx: UIContext): FrameCallback {
       case 'cahn-hilliard': {
         const config = makeCHConfig();
         (ctx.solver as CahnHilliardSolver).updateCHConfig(config);
-        ctx.solver.updateMaterialColors([0.05, 0.05, 0.3], [1.0, 0.9, 0.2]);
+        // Use material colors from CH database
+        const mat = CH_MATERIALS[selCHMaterial.value];
+        ctx.solver.updateMaterialColors(mat.colorA, mat.colorB);
+        updateCHSpinodalWarning();
         warningsDiv.innerHTML = '';
         break;
       }
@@ -347,17 +368,16 @@ export function initUI(ctx: UIContext): FrameCallback {
     applyConfig();
   });
 
-  // ---- CH sliders ----
-  slCHMobility.addEventListener('input', () => {
-    valCHMobility.textContent = parseFloat(slCHMobility.value).toFixed(1);
+  // ---- CH controls ----
+  selCHMaterial.addEventListener('change', () => {
     applyConfig();
   });
-  slCHEpsilon.addEventListener('input', () => {
-    valCHEpsilon.textContent = parseFloat(slCHEpsilon.value).toFixed(1);
+  slCHTemp.addEventListener('input', () => {
+    valCHTemp.textContent = slCHTemp.value;
     applyConfig();
   });
-  slCHBarrier.addEventListener('input', () => {
-    valCHBarrier.textContent = parseFloat(slCHBarrier.value).toFixed(1);
+  slCHXi.addEventListener('input', () => {
+    valCHXi.textContent = slCHXi.value;
     applyConfig();
   });
   slCHMean.addEventListener('input', () => {
@@ -365,13 +385,16 @@ export function initUI(ctx: UIContext): FrameCallback {
     // Mean phi only affects the IC, not the running sim config
   });
 
-  // ---- GG sliders ----
-  slGGL.addEventListener('input', () => {
-    valGGL.textContent = parseFloat(slGGL.value).toFixed(1);
+  // ---- GG controls ----
+  selGGMaterial.addEventListener('change', () => {
     applyConfig();
   });
-  slGGKappa.addEventListener('input', () => {
-    valGGKappa.textContent = parseFloat(slGGKappa.value).toFixed(1);
+  slGGTemp.addEventListener('input', () => {
+    valGGTemp.textContent = slGGTemp.value;
+    applyConfig();
+  });
+  slGGXi.addEventListener('input', () => {
+    valGGXi.textContent = slGGXi.value;
     applyConfig();
   });
   selGGGrains.addEventListener('change', () => {

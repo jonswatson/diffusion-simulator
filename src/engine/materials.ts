@@ -1,12 +1,20 @@
 // ============================================================
-// Material database for solid-state diffusion.
+// Material databases for solid-state diffusion simulation modes.
 //
-// D₀ and Q are for the interdiffusion coefficient D̃ in binary systems.
-// For the dilute limit, the solute-in-solvent value is used.
+// Fick mode:
+//   D₀ and Q are for the interdiffusion coefficient D̃ in binary systems.
+//   Sources: Smithells Metals Reference Book, 8th ed., Table 13.3
+//            Shewmon, Diffusion in Solids, 2nd ed.
 //
-// Sources:
-//   Smithells Metals Reference Book, 8th ed., Table 13.3
-//   Shewmon, Diffusion in Solids, 2nd ed.
+// Cahn-Hilliard mode:
+//   Ω (interaction parameter) from regular solution model fits.
+//   D₀, Q for Arrhenius mobility.
+//   Sources: de Fontaine, Solid State Physics 34 (1979)
+//            Hillert, Phase Equilibria, Phase Diagrams and Phase Transformations
+//
+// Grain Growth mode:
+//   Q_gb (grain boundary migration activation energy).
+//   Sources: Humphreys & Hatherly, Recrystallization and Related Phenomena
 //
 // Q is stored in J/mol (not kJ/mol). The display layer converts for readability.
 // ============================================================
@@ -48,6 +56,81 @@ export const MATERIALS: Record<string, Material> = {
   },
 };
 
+// ============================================================
+// Cahn-Hilliard material database (binary regular solution systems)
+// ============================================================
+
+export interface CHMaterial {
+  name: string;
+  symbol: string;
+  Omega_Jmol: number;    // J/mol — regular solution interaction parameter
+  D0: number;            // m²/s — pre-exponential for Arrhenius mobility
+  Q: number;             // J/mol — activation energy for mobility
+  T_spinodal: number;    // K — Ω/(2R), max T for spinodal decomposition
+  T_min: number;         // K — lower bound of validated range
+  T_max: number;         // K — upper bound of validated range
+  colorA: [number, number, number]; // linear RGB for phase A
+  colorB: [number, number, number]; // linear RGB for phase B
+}
+
+export const CH_MATERIALS: Record<string, CHMaterial> = {
+  'Al-Zn': {
+    name: 'Aluminium-Zinc', symbol: 'Al-Zn',
+    Omega_Jmol: 10_000, D0: 2.59e-5, Q: 120_500,
+    T_spinodal: 601,  // 10000 / (2 × 8.314) ≈ 601 K
+    T_min: 300, T_max: 600,
+    colorA: [0.75, 0.75, 0.82], // aluminium silver
+    colorB: [0.65, 0.65, 0.70], // zinc grey
+  },
+  'Fe-Cr': {
+    name: 'Iron-Chromium', symbol: 'Fe-Cr',
+    Omega_Jmol: 20_500, D0: 2.33e-4, Q: 241_000,
+    T_spinodal: 1233, // 20500 / (2 × 8.314) ≈ 1233 K — 475°C embrittlement regime
+    T_min: 600, T_max: 1200,
+    colorA: [0.65, 0.65, 0.70], // iron grey
+    colorB: [0.47, 0.63, 0.47], // chromium green
+  },
+  'Cu-Ni': {
+    name: 'Copper-Nickel', symbol: 'Cu-Ni',
+    Omega_Jmol: 8_000, D0: 1.93e-4, Q: 230_000,
+    T_spinodal: 481,  // 8000 / (2 × 8.314) ≈ 481 K
+    T_min: 300, T_max: 480,
+    colorA: [0.72, 0.45, 0.20], // copper brown
+    colorB: [0.47, 0.63, 0.47], // nickel green
+  },
+};
+
+// ============================================================
+// Grain Growth material database (polycrystalline systems)
+// ============================================================
+
+export interface GGMaterial {
+  name: string;
+  symbol: string;
+  Q_gb: number;    // J/mol — activation energy for grain boundary migration
+  T_min: number;   // K
+  T_max: number;   // K
+}
+
+export const GG_MATERIALS: Record<string, GGMaterial> = {
+  'Al-poly': {
+    name: 'Aluminium', symbol: 'Al',
+    Q_gb: 130_000, T_min: 400, T_max: 900,
+  },
+  'Fe-poly': {
+    name: 'Iron', symbol: 'Fe',
+    Q_gb: 150_000, T_min: 700, T_max: 1200,
+  },
+  'Cu-poly': {
+    name: 'Copper', symbol: 'Cu',
+    Q_gb: 110_000, T_min: 400, T_max: 1000,
+  },
+};
+
+// ============================================================
+// Mode-specific config interfaces
+// ============================================================
+
 /** Fick's 2nd law: requires a real material + temperature for Arrhenius D(T). */
 export interface FickConfig {
   mode: 'fick';
@@ -59,30 +142,33 @@ export interface FickConfig {
 
 /**
  * Cahn-Hilliard spinodal decomposition.
- * All parameters are dimensionless (normalized to grid spacing / timestep).
+ * Uses regular solution thermodynamics: f(φ) = Ω·φ·(1−φ) + RT·[φ·ln(φ) + (1−φ)·ln(1−φ)]
+ * Mobility and gradient energy derived from material properties + temperature.
  */
 export interface CahnHilliardConfig {
   mode: 'cahn-hilliard';
-  mobility: number;       // dimensionless mobility M
-  epsilon: number;        // gradient energy coefficient (grid units)
-  barrierHeight: number;  // double-well depth A: f(φ) = A·φ²·(1−φ)²
-  domainSize_m: number;   // meters (for display / dx calc)
-  gridWidth: number;      // pixels (square grid)
+  material: CHMaterial;
+  temperature_K: number;     // K — simulation temperature
+  interfaceWidth_px: number; // pixels — desired interface width (2–16)
+  domainSize_m: number;      // meters (for display / dx calc)
+  gridWidth: number;         // pixels (square grid)
 }
 
 /**
  * Allen-Cahn multi-order-parameter grain growth.
- * Dimensionless parameters for educational clarity.
+ * Kinetic coefficient L(T) from Arrhenius, gradient coefficient κ
+ * computed from interface width to ensure grid-resolved boundaries.
  */
 export interface GrainGrowthConfig {
   mode: 'grain-growth';
-  kinetic_L: number;      // dimensionless kinetic coefficient
-  kappa: number;           // gradient energy coefficient
-  barrierA: number;        // same-phase well depth
-  crossB: number;          // cross-coupling strength between grains
-  numGrains: number;       // 4–16
-  domainSize_m: number;    // meters (for display / dx calc)
-  gridWidth: number;       // pixels (square grid)
+  material: GGMaterial;
+  temperature_K: number;     // K — simulation temperature
+  interfaceWidth_px: number; // pixels — desired interface width (3–12)
+  barrierA: number;          // same-phase well depth (dimensionless)
+  crossB: number;            // cross-coupling strength between grains
+  numGrains: number;         // 4–16
+  domainSize_m: number;      // meters (for display / dx calc)
+  gridWidth: number;         // pixels (square grid)
 }
 
 /** Legacy SimConfig for backward compatibility with Fick-only code. */

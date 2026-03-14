@@ -7,8 +7,9 @@ const W = 64;
 function makeGGConfig() {
   return {
     mode: 'grain-growth' as const,
-    kinetic_L: 1.0,
-    kappa: 0.5,
+    material: { name: 'Aluminium', symbol: 'Al', Q_gb: 130_000, T_min: 400, T_max: 900 },
+    temperature_K: 700,
+    interfaceWidth_px: 6,  // well-resolved (was 0.71 px with old κ=0.5)
     barrierA: 1.0,
     crossB: 1.0,
     numGrains: NUM_GRAINS,

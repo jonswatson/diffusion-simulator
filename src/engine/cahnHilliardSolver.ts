@@ -11,7 +11,7 @@
 // ============================================================
 
 import { createFieldBuffer, createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
-import { computeCHDt, computeDx } from './physics';
+import { R_GAS, computeCHDt, computeDx, epsilonSqFromInterfaceWidth } from './physics';
 import type { DiffusionEngine, SimMode, EngineState } from './types';
 import type { CahnHilliardConfig } from './materials';
 import muWGSL from './shaders/cahnHilliardMu.wgsl?raw';
@@ -193,22 +193,47 @@ export class CahnHilliardSolver implements DiffusionEngine {
     this.renderBindGroup = this.makeRenderBindGroup();
   }
 
-  /** Apply physics parameters from a CH config. */
+  /**
+   * Apply physics parameters from a CH config.
+   * Computes dimensionless Ω/RT, Arrhenius mobility, and gradient energy
+   * from the material database + temperature + interface width.
+   */
   updateCHConfig(config: CahnHilliardConfig): void {
     const dx = computeDx(config.domainSize_m, config.gridWidth);
-    const epsilon_sq = config.epsilon * config.epsilon;
-    const dt = computeCHDt(config.mobility, config.epsilon, config.barrierHeight, dx);
+    const RT = R_GAS * config.temperature_K;
+
+    // Dimensionless Ω/RT — spinodal instability when > 2
+    const Omega_d = config.material.Omega_Jmol / RT;
+    const RT_d = 1.0;
+
+    // Effective barrier height for ε² calculation: (Ω_d − 2) / 4
+    // This is the curvature of the regular solution free energy at φ = 0.5
+    const A_eff = Math.max(0.01, (Omega_d - 2.0) / 4.0);
+
+    // Gradient energy from interface width
+    const epsilon_sq = epsilonSqFromInterfaceWidth(config.interfaceWidth_px, A_eff);
+    const epsilon = Math.sqrt(epsilon_sq);
+
+    // Mobility from Arrhenius, normalized to T_spinodal
+    const T_ref = config.material.T_spinodal;
+    const M = Math.exp(-config.material.Q / RT)
+            / Math.exp(-config.material.Q / (R_GAS * T_ref));
+
+    const dt = computeCHDt(M, epsilon, A_eff, dx);
 
     this._state.dx = dx;
     this._state.dt = dt;
-    this._state.diffusivity = config.mobility; // informational
+    this._state.diffusivity = M; // informational
     this._state.r = 0; // not meaningful for CH
 
-    this.writeUniforms(dx, dt, config.mobility, epsilon_sq, config.barrierHeight);
+    this.writeUniforms(dx, dt, M, epsilon_sq, Omega_d, RT_d);
   }
 
-  /** Write the GPU uniform struct. */
-  private writeUniforms(dx: number, dt: number, M: number, epsilon_sq: number, A: number): void {
+  /** Write the GPU uniform struct: width(u32) height(u32) dt dx M epsilon_sq Omega RT — 32 bytes. */
+  private writeUniforms(
+    dx: number, dt: number, M: number, epsilon_sq: number,
+    Omega: number, RT: number,
+  ): void {
     const buf = new ArrayBuffer(UNIFORM_SIZE);
     const u32View = new Uint32Array(buf);
     const f32View = new Float32Array(buf);
@@ -218,8 +243,8 @@ export class CahnHilliardSolver implements DiffusionEngine {
     f32View[3] = dx;
     f32View[4] = M;
     f32View[5] = epsilon_sq;
-    f32View[6] = A;
-    u32View[7] = 0; // pad
+    f32View[6] = Omega;
+    f32View[7] = RT;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, buf);
   }
 

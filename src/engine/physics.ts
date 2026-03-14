@@ -109,6 +109,47 @@ export function computeGGDt(
 }
 
 // ============================================================
+// Regular solution / interface width helpers
+// ============================================================
+
+/**
+ * Spinodal temperature: T_s = Ω / (2R).
+ * Below T_s, the binary mixture is thermodynamically unstable
+ * and undergoes spinodal decomposition.
+ */
+export function spinodalTemperature(Omega_Jmol: number): number {
+  return Omega_Jmol / (2.0 * R_GAS);
+}
+
+/**
+ * Cahn-Hilliard gradient energy ε² from desired interface width in pixels.
+ *
+ * For a double-well-type free energy with effective barrier height A_eff,
+ * the equilibrium diffuse interface has width ξ_eq ≈ √(2·ε²/A_eff)
+ * (tanh profile). Inverting:
+ *
+ *   ε² = ξ² · A_eff / 2
+ */
+export function epsilonSqFromInterfaceWidth(xi_px: number, A_eff: number): number {
+  return xi_px * xi_px * A_eff / 2.0;
+}
+
+/**
+ * Allen-Cahn gradient coefficient κ from interface width.
+ *
+ * For a single-well f(η) = A·η²·(1−η)², the equilibrium interface width
+ * is ξ_eq = √(κ/A). Inverting:
+ *
+ *   κ = ξ² · A
+ *
+ * This is the key fix for the grain growth bug: with user-chosen ξ (3–12 px),
+ * the interface is properly resolved by the grid and grains can coarsen.
+ */
+export function kappaFromInterfaceWidth(xi_px: number, A: number): number {
+  return xi_px * xi_px * A;
+}
+
+// ============================================================
 // Extension path: Cahn–Hilliard phase field model
 //
 // The current Fickian engine solves ∂C/∂t = D∇²C.

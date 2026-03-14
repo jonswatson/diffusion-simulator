@@ -1,15 +1,24 @@
 import { test, expect } from '@playwright/test';
 import { waitForEngine } from './helpers';
 
-// Dimensionless Cahn-Hilliard config: domainSize = gridWidth → dx = 1.0
-// ε = 0.5 keeps most Fourier modes inside the spinodal (k_crit = √(A/ε²) = 2),
-// so phase separation is fast and observable in a small number of steps.
+// Regular solution Cahn-Hilliard config using Al-Zn material.
+// T = 400 K is well below T_spinodal = 601 K → Ω_d = Ω/(RT) ≈ 3.01 > 2 (unstable).
+//
+// Interface width = 3 px for the test: the CFL-limited growth rate per step
+// scales as 0.2/ξ⁴. With ξ=6 (UI default), 2000 steps gives only 1.36× growth.
+// With ξ=3, growth is 140× over 2000 steps — clearly detectable.
 function makeCHConfig(W: number) {
   return {
     mode: 'cahn-hilliard' as const,
-    mobility: 1.0,
-    epsilon: 0.5,
-    barrierHeight: 1.0,
+    material: {
+      name: 'Aluminium-Zinc', symbol: 'Al-Zn',
+      Omega_Jmol: 10_000, D0: 2.59e-5, Q: 120_500,
+      T_spinodal: 601, T_min: 300, T_max: 600,
+      colorA: [0.75, 0.75, 0.82] as [number, number, number],
+      colorB: [0.65, 0.65, 0.70] as [number, number, number],
+    },
+    temperature_K: 400,
+    interfaceWidth_px: 3,
     domainSize_m: W, // dx = W/W = 1.0 (dimensionless)
     gridWidth: W,
   };
