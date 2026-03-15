@@ -17,7 +17,7 @@ import type { SimConfig, CahnHilliardConfig, GrainGrowthConfig } from '../engine
 import type { SimMode, DiffusionEngine } from '../engine/types';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
-import { generateSpinodalField, generateVoronoiField, generateGrainColors } from './initialConditions';
+import { generateSpinodalField, generateSmoothVoronoiField, generateGrainColors } from './initialConditions';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
 
 export interface UIContext {
@@ -101,6 +101,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   const infoTime = $('info-time');
   const infoSteps = $('info-steps');
   const infoFps = $('info-fps');
+  const lblMassError = $('lbl-mass-error');
   const infoMassError = $('info-mass-error');
   const infoRmsError = $('info-rms-error');
   const warningsDiv = $('warnings');
@@ -161,8 +162,8 @@ export function initUI(ctx: UIContext): FrameCallback {
       mode: 'cahn-hilliard',
       material: CH_MATERIALS[selCHMaterial.value],
       temperature_K: parseInt(slCHTemp.value, 10),
-      interfaceWidth_px: parseInt(slCHXi.value, 10),
-      domainSize_m: currentGridWidth, // dimensionless: dx = 1
+      interfaceWidth_m: parseFloat(slCHXi.value) * 1e-6, // µm → m
+      domainSize_m: currentDomainSize,
       gridWidth: currentGridWidth,
     };
   }
@@ -173,11 +174,11 @@ export function initUI(ctx: UIContext): FrameCallback {
       mode: 'grain-growth',
       material: GG_MATERIALS[selGGMaterial.value],
       temperature_K: parseInt(slGGTemp.value, 10),
-      interfaceWidth_px: parseInt(slGGXi.value, 10),
+      interfaceWidth_m: parseFloat(slGGXi.value) * 1e-6, // µm → m
       barrierA: 1.0,
       crossB: 1.0,
       numGrains: parseInt(selGGGrains.value, 10),
-      domainSize_m: currentGridWidth, // dimensionless: dx = 1
+      domainSize_m: currentDomainSize,
       gridWidth: currentGridWidth,
     };
   }
@@ -255,7 +256,9 @@ export function initUI(ctx: UIContext): FrameCallback {
       }
       case 'grain-growth': {
         const numGrains = parseInt(selGGGrains.value, 10);
-        field = generateVoronoiField(currentGridWidth, numGrains);
+        const xi_px = parseFloat(slGGXi.value) * 1e-6
+          / (currentDomainSize / currentGridWidth);
+        field = generateSmoothVoronoiField(currentGridWidth, numGrains, xi_px);
         // Also set grain colors
         const colors = generateGrainColors(numGrains) as Float32Array<ArrayBuffer>;
         (ctx.solver as GrainGrowthSolver).setGrainColors(colors);
@@ -493,10 +496,19 @@ export function initUI(ctx: UIContext): FrameCallback {
     infoSteps.textContent = info.stepsRun.toLocaleString();
     infoFps.textContent = `${info.fps.toFixed(0)}`;
 
-    // Validation readouts
-    infoMassError.textContent = validation.lastMassError > 0
-      ? `${(validation.lastMassError * 100).toFixed(4)}%`
-      : '\u2014';
+    // Validation readouts — mode-dependent
+    if (currentMode === 'grain-growth') {
+      // Allen-Cahn is nonconserved; show Ση_i constraint instead of mass drift
+      lblMassError.textContent = '\u03A3\u03B7\u1D62 error';
+      infoMassError.textContent = validation.lastSumEtaError > 0
+        ? validation.lastSumEtaError.toFixed(4)
+        : '\u2014';
+    } else {
+      lblMassError.textContent = 'Mass drift';
+      infoMassError.textContent = validation.lastMassError > 0
+        ? `${(validation.lastMassError * 100).toFixed(4)}%`
+        : '\u2014';
+    }
 
     // RMS vs erfc is only valid for Fick mode
     if (currentMode === 'fick') {

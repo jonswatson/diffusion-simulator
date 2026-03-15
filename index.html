@@ -69,8 +69,8 @@
             <input id="sl-ch-temp" type="range" min="300" max="1500" value="500" step="1" />
           </label>
           <label>
-            Interface width: <span id="val-ch-xi">6</span> px
-            <input id="sl-ch-xi" type="range" min="2" max="16" value="6" step="1" />
+            Interface width: <span id="val-ch-xi">2.3</span> &micro;m
+            <input id="sl-ch-xi" type="range" min="0.5" max="10.0" value="2.3" step="0.1" />
           </label>
           <label>
             Mean &phi;: <span id="val-ch-mean">0.50</span>
@@ -95,8 +95,8 @@
             <input id="sl-gg-temp" type="range" min="300" max="1500" value="700" step="1" />
           </label>
           <label>
-            Interface width: <span id="val-gg-xi">6</span> px
-            <input id="sl-gg-xi" type="range" min="3" max="12" value="6" step="1" />
+            Interface width: <span id="val-gg-xi">2.3</span> &micro;m
+            <input id="sl-gg-xi" type="range" min="0.5" max="10.0" value="2.3" step="0.1" />
           </label>
           <label>
             Grains
@@ -159,7 +159,7 @@
         </table>
         <h3>Validation</h3>
         <table>
-          <tr><td>Mass drift</td><td id="info-mass-error">—</td></tr>
+          <tr><td id="lbl-mass-error">Mass drift</td><td id="info-mass-error">—</td></tr>
           <tr><td>RMS vs erfc</td><td id="info-rms-error">—</td></tr>
         </table>
         <div id="warnings"></div>

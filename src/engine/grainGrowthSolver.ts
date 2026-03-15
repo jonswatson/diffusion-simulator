@@ -172,10 +172,9 @@ export class GrainGrowthSolver implements DiffusionEngine {
   updateGGConfig(config: GrainGrowthConfig): void {
     const dx = computeDx(config.domainSize_m, config.gridWidth);
 
-    // Compute κ from interface width — THIS IS THE KEY FIX
-    // With ξ=6 px and A=1: κ = 36 → well-resolved interface
-    // (Previously κ=0.5 gave ξ=0.71 px — sub-pixel, unresolvable)
-    const kappa = kappaFromInterfaceWidth(config.interfaceWidth_px, config.barrierA);
+    // Gradient coefficient κ in m² (same units as dx)
+    // so the shader's κ/dx² = ξ_m²·A/dx² = ξ_px²·A (correct dimensionless ratio)
+    const kappa = kappaFromInterfaceWidth(config.interfaceWidth_m, config.barrierA);
 
     // L(T) via Arrhenius, normalized to T_ref = 800 K
     const T_ref = 800;

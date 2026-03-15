@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   generateSpinodalField,
   generateVoronoiField,
+  generateSmoothVoronoiField,
   generateGrainColors,
 } from '../../src/app/initialConditions';
 
@@ -89,6 +90,77 @@ describe('generateVoronoiField', () => {
     for (let i = 0; i < packed.length; i++) {
       expect(packed[i] === 0 || packed[i] === 1).toBe(true);
     }
+  });
+});
+
+describe('generateSmoothVoronoiField', () => {
+  const gridSize = 64;
+  const numGrains = 4;
+  const xi_px = 6;
+
+  it('returns correct packed length (N × gridSize²)', () => {
+    const packed = generateSmoothVoronoiField(gridSize, numGrains, xi_px);
+    expect(packed.length).toBe(numGrains * gridSize * gridSize);
+  });
+
+  it('Ση_i = 1 at every cell (partition of unity)', () => {
+    const packed = generateSmoothVoronoiField(gridSize, numGrains, xi_px);
+    const WH = gridSize * gridSize;
+
+    for (let j = 0; j < WH; j++) {
+      let sumEta = 0;
+      for (let i = 0; i < numGrains; i++) {
+        sumEta += packed[i * WH + j];
+      }
+      expect(sumEta).toBeCloseTo(1.0, 5);
+    }
+  });
+
+  it('all η values are in [0, 1]', () => {
+    const packed = generateSmoothVoronoiField(gridSize, numGrains, xi_px);
+    for (let i = 0; i < packed.length; i++) {
+      expect(packed[i]).toBeGreaterThanOrEqual(-1e-6);
+      expect(packed[i]).toBeLessThanOrEqual(1.0 + 1e-6);
+    }
+  });
+
+  it('interior cells have η_owner close to 1.0', () => {
+    const packed = generateSmoothVoronoiField(gridSize, numGrains, xi_px);
+    const WH = gridSize * gridSize;
+
+    // Count cells where maxEta > 0.9 (well inside a grain)
+    // With ξ=6 on 64×64, cells must be ~6px from any boundary for η>0.9.
+    // On a small grid with 4 grains, boundaries are close together,
+    // so only ~30-40% of cells are deep interior.
+    let nearOneCount = 0;
+    for (let j = 0; j < WH; j++) {
+      let maxEta = 0;
+      for (let i = 0; i < numGrains; i++) {
+        maxEta = Math.max(maxEta, packed[i * WH + j]);
+      }
+      if (maxEta > 0.9) nearOneCount++;
+    }
+
+    // At least some cells should be deep inside grains
+    expect(nearOneCount / WH).toBeGreaterThan(0.1);
+  });
+
+  it('boundary cells have smooth (non-binary) η values', () => {
+    const packed = generateSmoothVoronoiField(gridSize, numGrains, xi_px);
+    const WH = gridSize * gridSize;
+
+    // Count cells where 0.1 < maxEta < 0.9 (near boundaries)
+    let boundaryCount = 0;
+    for (let j = 0; j < WH; j++) {
+      let maxEta = 0;
+      for (let i = 0; i < numGrains; i++) {
+        maxEta = Math.max(maxEta, packed[i * WH + j]);
+      }
+      if (maxEta > 0.1 && maxEta < 0.9) boundaryCount++;
+    }
+
+    // Should have some boundary cells (smooth transitions)
+    expect(boundaryCount).toBeGreaterThan(0);
   });
 });
 

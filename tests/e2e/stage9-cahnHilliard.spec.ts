@@ -4,8 +4,8 @@ import { waitForEngine } from './helpers';
 // Regular solution Cahn-Hilliard config using Al-Zn material.
 // T = 400 K is well below T_spinodal = 601 K → Ω_d = Ω/(RT) ≈ 3.01 > 2 (unstable).
 //
-// Interface width = 3 px for the test: the CFL-limited growth rate per step
-// scales as 0.2/ξ⁴. With ξ=6 (UI default), 2000 steps gives only 1.36× growth.
+// Interface width = 3 µm on a 64 µm domain (W=64) → dx = 1 µm → ξ = 3 px.
+// The CFL-limited growth rate per step scales as 0.2/ξ⁴.
 // With ξ=3, growth is 140× over 2000 steps — clearly detectable.
 function makeCHConfig(W: number) {
   return {
@@ -18,8 +18,8 @@ function makeCHConfig(W: number) {
       colorB: [0.65, 0.65, 0.70] as [number, number, number],
     },
     temperature_K: 400,
-    interfaceWidth_px: 3,
-    domainSize_m: W, // dx = W/W = 1.0 (dimensionless)
+    interfaceWidth_m: 3e-6, // 3 µm → 3 px at dx = 1 µm
+    domainSize_m: W * 1e-6, // W µm → dx = 1e-6 m (1 µm/pixel)
     gridWidth: W,
   };
 }

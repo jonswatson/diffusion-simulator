@@ -122,31 +122,34 @@ export function spinodalTemperature(Omega_Jmol: number): number {
 }
 
 /**
- * Cahn-Hilliard gradient energy ε² from desired interface width in pixels.
+ * Cahn-Hilliard gradient energy ε² from interface width (in grid cells).
  *
  * For a double-well-type free energy with effective barrier height A_eff,
  * the equilibrium diffuse interface has width ξ_eq ≈ √(2·ε²/A_eff)
  * (tanh profile). Inverting:
  *
  *   ε² = ξ² · A_eff / 2
+ *
+ * Unit-agnostic: pass ξ in any consistent unit system (meters, pixels, etc.);
+ * result is in ξ² units. When ξ is in meters the result is m², matching dx.
  */
-export function epsilonSqFromInterfaceWidth(xi_px: number, A_eff: number): number {
-  return xi_px * xi_px * A_eff / 2.0;
+export function epsilonSqFromInterfaceWidth(xi: number, A_eff: number): number {
+  return xi * xi * A_eff / 2.0;
 }
 
 /**
- * Allen-Cahn gradient coefficient κ from interface width.
+ * Allen-Cahn gradient coefficient κ from interface width (in grid cells).
  *
  * For a single-well f(η) = A·η²·(1−η)², the equilibrium interface width
  * is ξ_eq = √(κ/A). Inverting:
  *
  *   κ = ξ² · A
  *
- * This is the key fix for the grain growth bug: with user-chosen ξ (3–12 px),
- * the interface is properly resolved by the grid and grains can coarsen.
+ * Unit-agnostic: pass ξ in any consistent unit system (meters, pixels, etc.);
+ * result is in ξ² units. When ξ is in meters the result is m², matching dx.
  */
-export function kappaFromInterfaceWidth(xi_px: number, A: number): number {
-  return xi_px * xi_px * A;
+export function kappaFromInterfaceWidth(xi: number, A: number): number {
+  return xi * xi * A;
 }
 
 // ============================================================

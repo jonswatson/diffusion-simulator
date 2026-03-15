@@ -9,11 +9,11 @@ function makeGGConfig() {
     mode: 'grain-growth' as const,
     material: { name: 'Aluminium', symbol: 'Al', Q_gb: 130_000, T_min: 400, T_max: 900 },
     temperature_K: 700,
-    interfaceWidth_px: 6,  // well-resolved (was 0.71 px with old κ=0.5)
+    interfaceWidth_m: 6e-6,  // 6 µm → 6 px at dx = 1 µm
     barrierA: 1.0,
     crossB: 1.0,
     numGrains: NUM_GRAINS,
-    domainSize_m: W, // dx = 1.0 (dimensionless)
+    domainSize_m: W * 1e-6,  // W µm → dx = 1e-6 m (1 µm/pixel)
     gridWidth: W,
   };
 }

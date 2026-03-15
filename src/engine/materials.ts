@@ -149,8 +149,8 @@ export interface CahnHilliardConfig {
   mode: 'cahn-hilliard';
   material: CHMaterial;
   temperature_K: number;     // K — simulation temperature
-  interfaceWidth_px: number; // pixels — desired interface width (2–16)
-  domainSize_m: number;      // meters (for display / dx calc)
+  interfaceWidth_m: number;  // meters — desired diffuse interface width
+  domainSize_m: number;      // meters — physical domain size
   gridWidth: number;         // pixels (square grid)
 }
 
@@ -163,11 +163,11 @@ export interface GrainGrowthConfig {
   mode: 'grain-growth';
   material: GGMaterial;
   temperature_K: number;     // K — simulation temperature
-  interfaceWidth_px: number; // pixels — desired interface width (3–12)
+  interfaceWidth_m: number;  // meters — desired diffuse interface width
   barrierA: number;          // same-phase well depth (dimensionless)
   crossB: number;            // cross-coupling strength between grains
   numGrains: number;         // 4–16
-  domainSize_m: number;      // meters (for display / dx calc)
+  domainSize_m: number;      // meters — physical domain size
   gridWidth: number;         // pixels (square grid)
 }
 

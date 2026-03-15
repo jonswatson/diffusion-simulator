@@ -210,8 +210,9 @@ export class CahnHilliardSolver implements DiffusionEngine {
     // This is the curvature of the regular solution free energy at φ = 0.5
     const A_eff = Math.max(0.01, (Omega_d - 2.0) / 4.0);
 
-    // Gradient energy from interface width
-    const epsilon_sq = epsilonSqFromInterfaceWidth(config.interfaceWidth_px, A_eff);
+    // Gradient energy from interface width — ε² in m² (same units as dx)
+    // so the shader's ε²/dx² = ξ_m²·A/(2·dx²) = ξ_px²·A/2 (correct dimensionless ratio)
+    const epsilon_sq = epsilonSqFromInterfaceWidth(config.interfaceWidth_m, A_eff);
     const epsilon = Math.sqrt(epsilon_sq);
 
     // Mobility from Arrhenius, normalized to T_spinodal

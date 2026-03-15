@@ -13,6 +13,7 @@ export interface ValidationState {
   initialMass: number;
   lastMassError: number;       // fractional: |current - initial| / initial
   lastAnalyticalRMS: number;   // RMS error vs erfc solution on midline
+  lastSumEtaError: number;     // grain growth: mean |Ση_i − 1| across all cells
   lastCheckStep: number;
 }
 
@@ -55,6 +56,7 @@ export function createValidation(): ValidationState {
     initialMass: 0,
     lastMassError: 0,
     lastAnalyticalRMS: 0,
+    lastSumEtaError: 0,
     lastCheckStep: 0,
   };
 }
@@ -82,16 +84,24 @@ export async function runValidationChecks(
 
   const field = await solver.readField();
 
-  // Mass conservation (applies to all modes, but for GG use first W*H slice)
+  // Mass conservation check — mode-dependent
   if (mode === 'grain-growth') {
-    // For grain growth, mass check on the first eta slice (informational)
-    const sliceLen = gridWidth * gridWidth;
-    const slice = field.subarray(0, sliceLen);
-    const currentMass = fieldSum(slice);
-    if (validation.initialMass > 0) {
-      validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+    // Allen-Cahn is nonconserved: individual η_i sums change as grains coarsen.
+    // Instead, check the partition-of-unity constraint: Ση_i ≈ 1 at each cell.
+    const WH = gridWidth * gridWidth;
+    const numGrains = field.length / WH;
+    let sumAbsErr = 0;
+    for (let j = 0; j < WH; j++) {
+      let sumEta = 0;
+      for (let i = 0; i < numGrains; i++) {
+        sumEta += field[i * WH + j];
+      }
+      sumAbsErr += Math.abs(sumEta - 1.0);
     }
+    validation.lastSumEtaError = sumAbsErr / WH;
+    validation.lastMassError = 0; // not meaningful for Allen-Cahn
   } else {
+    // Fick and Cahn-Hilliard: total concentration/composition is conserved
     const currentMass = fieldSum(field);
     if (validation.initialMass > 0) {
       validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
