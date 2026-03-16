@@ -3,6 +3,7 @@
 //
 // Mass conservation: sum concentration at load, compare periodically.
 // Analytical validation: midline erfc comparison for 1D step IC.
+// Grain growth: bulk free energy and grain count diagnostics.
 // Mode-aware: analytical check only for Fick mode.
 // ============================================================
 
@@ -13,8 +14,10 @@ export interface ValidationState {
   initialMass: number;
   lastMassError: number;       // fractional: |current - initial| / initial
   lastAnalyticalRMS: number;   // RMS error vs erfc solution on midline
-  lastSumEtaError: number;     // grain growth: mean |Ση_i − 1| across all cells
   lastCheckStep: number;
+  // Grain growth diagnostics
+  lastFreeEnergy: number;      // bulk + interaction free energy (no gradient term)
+  lastGrainCount: number;      // grains with at least one dominant pixel
 }
 
 /** Compute the total "mass" (sum of all concentration values) from a field. */
@@ -50,15 +53,74 @@ export function midlineRMSError(
   return Math.sqrt(sumSqErr / gridWidth);
 }
 
+/**
+ * Bulk + interaction free energy for the Allen-Cahn multi-grain model.
+ * F_bulk = Σ_pix Σ_i  W/4·ηᵢ²·(1−ηᵢ)²
+ * F_inter = Σ_pix Σ_{i<j} A·ηᵢ²·ηⱼ²
+ * Gradient term omitted (needs finite differences; expensive on CPU).
+ * This quantity still decreases monotonically after the initial transient.
+ */
+export function grainBulkFreeEnergy(
+  field: Float32Array,
+  numGrains: number,
+  gridSize: number,
+  W: number,
+  A: number,
+): number {
+  const planeSize = gridSize * gridSize;
+  let F = 0;
+  for (let pix = 0; pix < planeSize; pix++) {
+    for (let i = 0; i < numGrains; i++) {
+      const ei = field[i * planeSize + pix];
+      F += (W / 4) * ei * ei * (1 - ei) * (1 - ei);
+      for (let j = i + 1; j < numGrains; j++) {
+        const ej = field[j * planeSize + pix];
+        F += A * ei * ei * ej * ej;
+      }
+    }
+  }
+  return F;
+}
+
+/**
+ * Count grains that are dominant (maxEta > 0.5) in at least one pixel.
+ * A grain drops from this count once it has been fully consumed.
+ */
+export function countActiveGrains(
+  field: Float32Array,
+  numGrains: number,
+  gridSize: number,
+): number {
+  const planeSize = gridSize * gridSize;
+  const present = new Set<number>();
+  for (let pix = 0; pix < planeSize; pix++) {
+    let maxEta = 0;
+    let best = 0;
+    for (let g = 0; g < numGrains; g++) {
+      const e = field[g * planeSize + pix];
+      if (e > maxEta) { maxEta = e; best = g; }
+    }
+    if (maxEta > 0.5) present.add(best);
+  }
+  return present.size;
+}
+
 /** Create a validation state tracker. Call setInitialMass after loadField. */
 export function createValidation(): ValidationState {
   return {
     initialMass: 0,
     lastMassError: 0,
     lastAnalyticalRMS: 0,
-    lastSumEtaError: 0,
     lastCheckStep: 0,
+    lastFreeEnergy: 0,
+    lastGrainCount: 0,
   };
+}
+
+export interface GGValidationParams {
+  numGrains: number;
+  W: number;
+  A: number;
 }
 
 /**
@@ -66,13 +128,14 @@ export function createValidation(): ValidationState {
  * to only check every 500 steps.
  *
  * The readField callback is async (GPU readback) so this returns a promise.
- * Mode parameter controls whether analytical (erfc) comparison is run.
+ * Mode parameter controls which checks are run.
  */
 export async function runValidationChecks(
   validation: ValidationState,
   solver: DiffusionEngine,
   gridWidth: number,
   mode: SimMode = 'fick',
+  ggParams?: GGValidationParams,
 ): Promise<void> {
   const state = solver.state;
   const stepsSinceCheck = state.stepsRun - validation.lastCheckStep;
@@ -84,32 +147,21 @@ export async function runValidationChecks(
 
   const field = await solver.readField();
 
-  // Mass conservation check — mode-dependent
-  if (mode === 'grain-growth') {
-    // Allen-Cahn is nonconserved: individual η_i sums change as grains coarsen.
-    // Instead, check the partition-of-unity constraint: Ση_i ≈ 1 at each cell.
-    const WH = gridWidth * gridWidth;
-    const numGrains = field.length / WH;
-    let sumAbsErr = 0;
-    for (let j = 0; j < WH; j++) {
-      let sumEta = 0;
-      for (let i = 0; i < numGrains; i++) {
-        sumEta += field[i * WH + j];
-      }
-      sumAbsErr += Math.abs(sumEta - 1.0);
-    }
-    validation.lastSumEtaError = sumAbsErr / WH;
-    validation.lastMassError = 0; // not meaningful for Allen-Cahn
+  if (mode === 'grain-growth' && ggParams) {
+    validation.lastFreeEnergy = grainBulkFreeEnergy(
+      field, ggParams.numGrains, gridWidth, ggParams.W, ggParams.A,
+    );
+    validation.lastGrainCount = countActiveGrains(field, ggParams.numGrains, gridWidth);
   } else {
-    // Fick and Cahn-Hilliard: total concentration/composition is conserved
+    // Mass conservation: total concentration/composition is conserved
     const currentMass = fieldSum(field);
     if (validation.initialMass > 0) {
       validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
     }
-  }
 
-  // Analytical comparison (only valid for Fick default step-function IC)
-  if (mode === 'fick' && state.time > 0) {
-    validation.lastAnalyticalRMS = midlineRMSError(field, gridWidth, state);
+    // Analytical comparison (only valid for Fick default step-function IC)
+    if (mode === 'fick' && state.time > 0) {
+      validation.lastAnalyticalRMS = midlineRMSError(field, gridWidth, state);
+    }
   }
 }

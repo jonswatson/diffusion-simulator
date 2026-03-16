@@ -8,8 +8,8 @@ export type { CHSolverConfig } from './cahnHilliardSolver';
 export { GrainGrowthSolver } from './grainGrowthSolver';
 export type { GGSolverConfig } from './grainGrowthSolver';
 export type { DiffusionEngine, SimMode, EngineState } from './types';
-export type { Material, CHMaterial, GGMaterial, SimConfig, FickConfig, CahnHilliardConfig, GrainGrowthConfig, ModeConfig } from './materials';
-export { MATERIALS, CH_MATERIALS, GG_MATERIALS } from './materials';
+export type { Material, CHMaterial, SimConfig, FickConfig, CahnHilliardConfig, GGConfig, ModeConfig } from './materials';
+export { MATERIALS, CH_MATERIALS } from './materials';
 export {
   R_GAS,
   arrheniusDiffusivity,
@@ -22,5 +22,4 @@ export {
   analyticalConcentration,
   spinodalTemperature,
   epsilonSqFromInterfaceWidth,
-  kappaFromInterfaceWidth,
 } from './physics';

@@ -1,38 +1,34 @@
 // ============================================================
-// Render shader for multi-order-parameter grain growth.
+// Grain growth render shader.
 //
-// Reads packed eta buffer [N × W × H], finds the dominant grain
-// (argmax η_i) at each pixel, and looks up its color from a
-// storage buffer color table.
+// For each canvas pixel (x,y):
+//   1. Find the dominant grain: i* = argmax_i ηᵢ(x,y)
+//   2. Look up its RGB color from the color table.
+//   3. Modulate brightness by smoothstep(0.1, 0.55, maxEta) so that:
+//        bulk grain (maxEta ≈ 1.0) → full brightness
+//        triple junction (maxEta ≈ 1/3) → dim but visible
+//        fully void (maxEta ≈ 0) → dark
 //
-// Grain boundaries (where max η < threshold) are rendered as
-// dark lines using smoothstep for anti-aliasing.
+// Buffer layout: eta[g * W² + y * W + x]  (grain-major order)
+// Color table:   colorTable[g * 3 + {0,1,2}] = {R, G, B}  (linear RGB)
 // ============================================================
 
-struct Uniforms {
-  width   : u32,
-  height  : u32,
-  dt      : f32,
-  dx      : f32,
-  L       : f32,
-  kappa   : f32,
-  A       : f32,
-  B       : f32,
-  N       : u32,
-  _pad1   : u32,
-  _pad2   : u32,
-  _pad3   : u32,
+struct RenderUniforms {
+  numGrains : u32,
+  gridWidth : u32,
+  _pad0     : f32,
+  _pad1     : f32,
 }
 
-@group(0) @binding(0) var<uniform>        uniforms   : Uniforms;
-@group(0) @binding(1) var<storage, read>  etaBuffer  : array<f32>;
-@group(0) @binding(2) var<storage, read>  colorTable : array<vec4f>;
+@group(0) @binding(0) var<uniform>       uniforms   : RenderUniforms;
+@group(0) @binding(1) var<storage, read> eta        : array<f32>;
+@group(0) @binding(2) var<storage, read> colorTable : array<f32>;  // [numGrains × 3]
 
 struct VertexOut {
   @builtin(position) pos : vec4f,
 }
 
-// Full-screen triangle: covers [-1,1]x[-1,1] NDC with 3 vertices.
+// Full-screen triangle: 3 vertices cover the entire [-1,1]² NDC space.
 @vertex
 fn vs_main(@builtin(vertex_index) vIdx: u32) -> VertexOut {
   var positions = array<vec2f, 3>(
@@ -46,33 +42,30 @@ fn vs_main(@builtin(vertex_index) vIdx: u32) -> VertexOut {
 }
 
 @fragment
-fn fs_main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let x = u32(pos.x);
-  let y = u32(pos.y);
+fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
+  let x = u32(fragCoord.x);
+  let y = u32(fragCoord.y);
+  let N = uniforms.gridWidth;
 
-  if (x >= uniforms.width || y >= uniforms.height) {
+  if (x >= N || y >= N) {
     return vec4f(0.05, 0.05, 0.05, 1.0);
   }
 
-  let WH = uniforms.width * uniforms.height;
+  let planeSize = N * N;
+  let pix = y * N + x;
 
-  // Find dominant grain (argmax η_i)
+  // Find dominant grain
   var maxEta = -1.0;
-  var maxIdx = 0u;
-  for (var i = 0u; i < uniforms.N; i = i + 1u) {
-    let eta = etaBuffer[i * WH + y * uniforms.width + x];
-    if (eta > maxEta) {
-      maxEta = eta;
-      maxIdx = i;
-    }
+  var best = 0u;
+  for (var g = 0u; g < uniforms.numGrains; g++) {
+    let e = eta[g * planeSize + pix];
+    if (e > maxEta) { maxEta = e; best = g; }
   }
 
-  // Look up grain color from table
-  let grainColor = colorTable[maxIdx].rgb;
+  let r  = colorTable[best * 3u];
+  let gr = colorTable[best * 3u + 1u];
+  let b  = colorTable[best * 3u + 2u];
 
-  // Darken at grain boundaries where the dominant η is weak
-  let boundary = smoothstep(0.3, 0.7, maxEta);
-  let color = grainColor * boundary;
-
-  return vec4f(color, 1.0);
+  let bright = smoothstep(0.1, 0.55, maxEta);
+  return vec4f(r * bright, gr * bright, b * bright, 1.0);
 }

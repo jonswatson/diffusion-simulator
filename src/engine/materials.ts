@@ -101,33 +101,6 @@ export const CH_MATERIALS: Record<string, CHMaterial> = {
 };
 
 // ============================================================
-// Grain Growth material database (polycrystalline systems)
-// ============================================================
-
-export interface GGMaterial {
-  name: string;
-  symbol: string;
-  Q_gb: number;    // J/mol — activation energy for grain boundary migration
-  T_min: number;   // K
-  T_max: number;   // K
-}
-
-export const GG_MATERIALS: Record<string, GGMaterial> = {
-  'Al-poly': {
-    name: 'Aluminium', symbol: 'Al',
-    Q_gb: 130_000, T_min: 400, T_max: 900,
-  },
-  'Fe-poly': {
-    name: 'Iron', symbol: 'Fe',
-    Q_gb: 150_000, T_min: 700, T_max: 1200,
-  },
-  'Cu-poly': {
-    name: 'Copper', symbol: 'Cu',
-    Q_gb: 110_000, T_min: 400, T_max: 1000,
-  },
-};
-
-// ============================================================
 // Mode-specific config interfaces
 // ============================================================
 
@@ -155,20 +128,17 @@ export interface CahnHilliardConfig {
 }
 
 /**
- * Allen-Cahn multi-order-parameter grain growth.
- * Kinetic coefficient L(T) from Arrhenius, gradient coefficient κ
- * computed from interface width to ensure grid-resolved boundaries.
+ * Nondimensional grain growth config (Allen-Cahn multi-order-parameter model).
+ * All parameters are dimensionless; dx = 1 is implicit in the shader Laplacian.
  */
-export interface GrainGrowthConfig {
+export interface GGConfig {
   mode: 'grain-growth';
-  material: GGMaterial;
-  temperature_K: number;     // K — simulation temperature
-  interfaceWidth_m: number;  // meters — desired diffuse interface width
-  barrierA: number;          // same-phase well depth (dimensionless)
-  crossB: number;            // cross-coupling strength between grains
-  numGrains: number;         // 4–16
-  domainSize_m: number;      // meters — physical domain size
-  gridWidth: number;         // pixels (square grid)
+  numGrains: number; // number of order parameters (one per grain)
+  kappa: number;     // gradient energy coefficient
+  W: number;         // double-well barrier height
+  A: number;         // grain-grain interaction coefficient
+  L: number;         // Allen-Cahn kinetic coefficient
+  gridWidth: number; // pixels (square grid)
 }
 
 /** Legacy SimConfig for backward compatibility with Fick-only code. */
@@ -180,4 +150,4 @@ export interface SimConfig {
 }
 
 /** Union of all mode-specific configs. */
-export type ModeConfig = FickConfig | CahnHilliardConfig | GrainGrowthConfig;
+export type ModeConfig = FickConfig | CahnHilliardConfig | GGConfig;
