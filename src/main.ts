@@ -1,5 +1,5 @@
 import './style.css';
-import { Solver, MATERIALS, CahnHilliardSolver, GrainGrowthSolver } from './engine';
+import { Solver, MATERIALS, CahnHilliardSolver, GrainGrowthSolver, BinarySolidificationSolver } from './engine';
 import { generateDefaultField } from './app/imageLoader';
 import { createLoop } from './app/loop';
 import { initUI } from './app/ui';
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__sim = {
         device, engine: solver, loop,
-        CahnHilliardSolver, GrainGrowthSolver,
+        CahnHilliardSolver, GrainGrowthSolver, BinarySolidificationSolver,
         canvasFormat, context: gpuContext,
       };
     }

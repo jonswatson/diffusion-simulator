@@ -101,33 +101,6 @@ export const CH_MATERIALS: Record<string, CHMaterial> = {
 };
 
 // ============================================================
-// Grain Growth material database (polycrystalline systems)
-// ============================================================
-
-export interface GGMaterial {
-  name: string;
-  symbol: string;
-  Q_gb: number;    // J/mol — activation energy for grain boundary migration
-  T_min: number;   // K
-  T_max: number;   // K
-}
-
-export const GG_MATERIALS: Record<string, GGMaterial> = {
-  'Al-poly': {
-    name: 'Aluminium', symbol: 'Al',
-    Q_gb: 130_000, T_min: 400, T_max: 900,
-  },
-  'Fe-poly': {
-    name: 'Iron', symbol: 'Fe',
-    Q_gb: 150_000, T_min: 700, T_max: 1200,
-  },
-  'Cu-poly': {
-    name: 'Copper', symbol: 'Cu',
-    Q_gb: 110_000, T_min: 400, T_max: 1000,
-  },
-};
-
-// ============================================================
 // Mode-specific config interfaces
 // ============================================================
 
@@ -155,21 +128,93 @@ export interface CahnHilliardConfig {
 }
 
 /**
- * Allen-Cahn multi-order-parameter grain growth.
- * Kinetic coefficient L(T) from Arrhenius, gradient coefficient κ
- * computed from interface width to ensure grid-resolved boundaries.
+ * Nondimensional grain growth config (Allen-Cahn multi-order-parameter model).
+ * All parameters are dimensionless; dx = 1 is implicit in the shader Laplacian.
  */
-export interface GrainGrowthConfig {
+export interface GGConfig {
   mode: 'grain-growth';
-  material: GGMaterial;
-  temperature_K: number;     // K — simulation temperature
-  interfaceWidth_m: number;  // meters — desired diffuse interface width
-  barrierA: number;          // same-phase well depth (dimensionless)
-  crossB: number;            // cross-coupling strength between grains
-  numGrains: number;         // 4–16
-  domainSize_m: number;      // meters — physical domain size
-  gridWidth: number;         // pixels (square grid)
+  numGrains: number; // number of order parameters (one per grain)
+  kappa: number;     // gradient energy coefficient
+  W: number;         // double-well barrier height
+  A: number;         // grain-grain interaction coefficient
+  L: number;         // Allen-Cahn kinetic coefficient
+  gridWidth: number; // pixels (square grid)
 }
+
+/**
+ * Preset binary alloy system for solidification.
+ * cs_eq / cl_eq are equilibrium solid/liquid compositions at the solidus/liquidus.
+ * As / Al are the parabolic free energy curvatures (higher = stiffer).
+ * c0 is the nominal alloy composition for the initial condition.
+ * All values are nondimensional.
+ */
+export interface SolidificationMaterial {
+  name: string;
+  symbol: string;
+  cs_eq: number; // equilibrium solid composition (mole fraction)
+  cl_eq: number; // equilibrium liquid composition (mole fraction)
+  As: number;    // curvature of solid free energy fs(c) = As·(c−cs_eq)²
+  Al: number;    // curvature of liquid free energy fl(c) = Al·(c−cl_eq)²
+  c0: number;    // nominal alloy composition for initial condition
+}
+
+export const SOLID_MATERIALS: Record<string, SolidificationMaterial> = {
+  'symmetric': {
+    name: 'Symmetric A-B', symbol: 'A-B',
+    cs_eq: 0.30, cl_eq: 0.70, As: 2.0, Al: 2.0, c0: 0.60,
+  },
+  'dilute': {
+    name: 'Dilute solution (k=0.2)', symbol: 'A-B (dilute)',
+    cs_eq: 0.05, cl_eq: 0.25, As: 4.0, Al: 2.0, c0: 0.15,
+  },
+  'near-eutectic': {
+    name: 'Near-eutectic', symbol: 'A-B (eut.)',
+    cs_eq: 0.45, cl_eq: 0.55, As: 3.0, Al: 3.0, c0: 0.50,
+  },
+  'strong-partition': {
+    name: 'Strong partition (k=0.17)', symbol: 'A-B (k≪1)',
+    cs_eq: 0.10, cl_eq: 0.60, As: 2.0, Al: 1.5, c0: 0.40,
+  },
+};
+
+/**
+ * Binary alloy solidification config.
+ * Coupled Allen-Cahn (φ, non-conserved) + diffusion (c, conserved).
+ * All parameters are nondimensional (dx = 1 implicit).
+ *
+ * Free energy: f = h(φ)·As·(c−cs_eq)² + (1−h(φ))·Al·(c−cl_eq)² + w·g(φ)
+ * where h(φ) = φ²(3−2φ), g(φ) = φ²(1−φ)²
+ * Phase update: ∂φ/∂t = Lphi·[κ∇²φ − dF/dφ + deltaF]
+ * deltaF is a dimensionless undercooling driving force (>0 → grow solid).
+ */
+export interface SolidificationConfig {
+  mode: 'binary-solidification';
+  kappa_phi: number; // gradient energy coefficient for phase field
+  w: number;         // double-well barrier height
+  Lphi: number;      // Allen-Cahn kinetic coefficient
+  As: number;        // curvature of solid free energy [nondimensional]
+  Al: number;        // curvature of liquid free energy [nondimensional]
+  cs_eq: number;     // equilibrium solid composition (mole fraction)
+  cl_eq: number;     // equilibrium liquid composition (mole fraction)
+  Ms: number;        // composition mobility in solid phase
+  Ml: number;        // composition mobility in liquid phase
+  deltaF: number;    // dimensionless undercooling driving force (>0 drives solidification)
+  gridWidth: number; // pixels (square grid)
+}
+
+/** Default solidification parameters (nondimensional). */
+export const DEFAULT_SOLID_CONFIG: Omit<SolidificationConfig, 'mode' | 'gridWidth'> = {
+  kappa_phi: 1.0,
+  w: 1.0,
+  Lphi: 1.0,
+  As: 2.0,
+  Al: 2.0,
+  cs_eq: 0.3,
+  cl_eq: 0.7,
+  Ms: 0.01,
+  Ml: 1.0,
+  deltaF: 0.5,
+};
 
 /** Legacy SimConfig for backward compatibility with Fick-only code. */
 export interface SimConfig {
@@ -180,4 +225,4 @@ export interface SimConfig {
 }
 
 /** Union of all mode-specific configs. */
-export type ModeConfig = FickConfig | CahnHilliardConfig | GrainGrowthConfig;
+export type ModeConfig = FickConfig | CahnHilliardConfig | GGConfig | SolidificationConfig;

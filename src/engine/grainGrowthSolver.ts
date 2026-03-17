@@ -1,20 +1,28 @@
 // ============================================================
-// Grain Growth solver — Allen-Cahn multi-order-parameter model.
+// Constrained Allen-Cahn grain growth solver.
 //
-// Each grain i has an order parameter η_i ∈ [0,1].
-// Buffer layout: packed flat, η_i(x,y) at index i*W*H + y*W + x.
-// Ping-pong between etaA and etaB buffers.
+// Single-pass explicit Euler per pixel:
+//   1. Compute μᵢ = δF/δφᵢ for every grain at every pixel.
+//   2. Compute λ = mean(μ) per pixel (Lagrange multiplier).
+//   3. φ̃ᵢ = φᵢ − dt·L·(μᵢ − λ)   (constrained update, Σφ conserved)
+//   4. Project φ̃ onto probability simplex (Duchi et al.).
 //
-// Uses a custom renderGrain.wgsl for color display with a
-// per-grain color table stored in a GPU storage buffer.
+// Constraint guarantees:
+//   - Σᵢ φᵢ(x,y) = 1 exactly after projection
+//   - φᵢ ≥ 0 everywhere after projection
+//   → No void phase, no dark band at grain boundaries.
+//
+// Ping-pong: phiA ↔ phiB with bind group swap each step.
+// Periodic boundary conditions (index wrapping in WGSL).
+// Buffer layout: phi[g * W² + y * W + x]  (grain-major order, f32).
 // ============================================================
 
 import { createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
-import { R_GAS, computeGGDt, computeDx, kappaFromInterfaceWidth } from './physics';
+import { computeGGDt } from './physics';
 import type { DiffusionEngine, SimMode, EngineState } from './types';
-import type { GrainGrowthConfig } from './materials';
-import grainWGSL from './shaders/grainGrowth.wgsl?raw';
-import renderGrainWGSL from './shaders/renderGrain.wgsl?raw';
+import type { GGConfig } from './materials';
+import constrainedWGSL from './shaders/grainGrowthConstrained.wgsl?raw';
+import renderWGSL from './shaders/renderGrain.wgsl?raw';
 
 export interface GGSolverConfig {
   device: GPUDevice;
@@ -25,44 +33,69 @@ export interface GGSolverConfig {
   numGrains: number;
 }
 
-/**
- * Uniform struct layout (48 bytes):
- *   width(u32) height(u32) dt(f32) dx(f32)
- *   L(f32) kappa(f32) A(f32) B(f32)
- *   N(u32) _pad×3
- */
-const UNIFORM_SIZE = 48;
+/** Compute uniform struct layout: numGrains(u32) gridWidth(u32) dt kappa W A L _pad = 32 bytes */
+const UNIFORM_SIZE = 32;
+
+/** Render uniform struct: numGrains(u32) gridWidth(u32) _pad0 _pad1 = 16 bytes */
+const RENDER_UNIFORM_SIZE = 16;
+
+/** Evenly-spaced HSL hues, converted to linear RGB [0,1]. */
+function makeColorTable(numGrains: number): Float32Array {
+  const table = new Float32Array(numGrains * 3);
+  for (let i = 0; i < numGrains; i++) {
+    const h = (i / numGrains) * 360;
+    const s = 0.75;
+    const l = 0.55;
+    // HSL → RGB (CSS algorithm)
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number): number => {
+      const k = (n + h / 30) % 12;
+      return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    };
+    table[i * 3]     = f(0);
+    table[i * 3 + 1] = f(8);
+    table[i * 3 + 2] = f(4);
+  }
+  return table;
+}
 
 export class GrainGrowthSolver implements DiffusionEngine {
   readonly mode: SimMode = 'grain-growth';
   readonly device: GPUDevice;
+
   private context: GPUCanvasContext;
   private width: number;
   private height: number;
   private numGrains: number;
 
-  // Ping-pong packed eta buffers (N × W × H)
-  private etaA: GPUBuffer;
-  private etaB: GPUBuffer;
+  // Ping-pong order-parameter buffers: [numGrains × W × H] f32
+  private phiA: GPUBuffer;
+  private phiB: GPUBuffer;
+
   private uniformBuffer: GPUBuffer;
+  private renderUniformBuffer: GPUBuffer;
   private colorTableBuffer: GPUBuffer;
 
-  // Compute pipeline
+  // Single compute pipeline (constrained Allen-Cahn, single pass)
   private computePipeline: GPUComputePipeline;
-  private bindGroupAtoB: GPUBindGroup;
-  private bindGroupBtoA: GPUBindGroup;
-  private parity = 0;
 
-  // Render pipeline (grain-colored display)
+  // Two bind groups — one per ping-pong direction
+  private bindGroupAtoB: GPUBindGroup;  // reads phiA → writes phiB
+  private bindGroupBtoA: GPUBindGroup;  // reads phiB → writes phiA
+
+  // Render pipeline
   private renderPipeline: GPURenderPipeline;
-  private renderBindGroup: GPUBindGroup;
+  private renderBG_A: GPUBindGroup;  // renders phiA
+  private renderBG_B: GPUBindGroup;  // renders phiB
+
+  private parity = 0;  // 0 = phiA is current, 1 = phiB is current
 
   private _state: EngineState = {
     time: 0,
-    diffusivity: 0,
-    dx: 1,
-    dt: 0.001,
-    r: 0,
+    diffusivity: 0,  // not meaningful for GG
+    dx: 1,           // nondimensional
+    dt: 0.005,
+    r: 0,            // not meaningful for GG
     stepsRun: 0,
   };
 
@@ -70,43 +103,48 @@ export class GrainGrowthSolver implements DiffusionEngine {
   get stepsRun(): number { return this._state.stepsRun; }
 
   get currentBuffer(): GPUBuffer {
-    return this.parity === 0 ? this.etaA : this.etaB;
+    return this.parity === 0 ? this.phiA : this.phiB;
   }
 
-  constructor(config: GGSolverConfig) {
-    const { device, context, canvasFormat, width, height, numGrains } = config;
+  constructor(cfg: GGSolverConfig) {
+    const { device, context, canvasFormat, width, height, numGrains } = cfg;
     this.device = device;
     this.context = context;
     this.width = width;
     this.height = height;
     this.numGrains = numGrains;
 
-    const packedSize = numGrains * width * height * BYTES_PER_CELL;
+    const phiBytes = numGrains * width * height * BYTES_PER_CELL;
 
     // --- Buffers ---
-    this.etaA = device.createBuffer({
-      label: 'eta-A',
-      size: packedSize,
+    this.phiA = device.createBuffer({
+      label: 'phi-A',
+      size: phiBytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
-    this.etaB = device.createBuffer({
-      label: 'eta-B',
-      size: packedSize,
+    this.phiB = device.createBuffer({
+      label: 'phi-B',
+      size: phiBytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
     this.uniformBuffer = createUniformBuffer(device, UNIFORM_SIZE);
-
-    // Color table: N × vec4f (16 bytes each, padded for alignment)
+    this.renderUniformBuffer = createUniformBuffer(device, RENDER_UNIFORM_SIZE);
     this.colorTableBuffer = device.createBuffer({
-      label: 'grain-colors',
-      size: numGrains * 16,
+      label: 'color-table',
+      size: numGrains * 3 * BYTES_PER_CELL,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    // Default colors: evenly spaced HSL hues
-    this.setDefaultColors();
+    // Initialize color table and render uniforms
+    device.queue.writeBuffer(this.colorTableBuffer, 0, makeColorTable(numGrains) as Float32Array<ArrayBuffer>);
+    const ru = new ArrayBuffer(RENDER_UNIFORM_SIZE);
+    const ru32 = new Uint32Array(ru);
+    ru32[0] = numGrains;
+    ru32[1] = width;
+    device.queue.writeBuffer(this.renderUniformBuffer, 0, ru);
 
     // --- Compute pipeline ---
+    const computeModule = device.createShaderModule({ code: constrainedWGSL, label: 'gg-constrained' });
     const computeBGL = device.createBindGroupLayout({
       label: 'gg-compute-bgl',
       entries: [
@@ -115,32 +153,31 @@ export class GrainGrowthSolver implements DiffusionEngine {
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
-
     this.computePipeline = device.createComputePipeline({
-      label: 'gg-compute-pipeline',
+      label: 'gg-constrained-pipeline',
       layout: device.createPipelineLayout({ bindGroupLayouts: [computeBGL] }),
-      compute: { module: device.createShaderModule({ code: grainWGSL, label: 'grain-growth' }), entryPoint: 'main' },
+      compute: { module: computeModule, entryPoint: 'main' },
     });
 
     this.bindGroupAtoB = device.createBindGroup({
       layout: computeBGL,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaA } },
-        { binding: 2, resource: { buffer: this.etaB } },
+        { binding: 1, resource: { buffer: this.phiA } },
+        { binding: 2, resource: { buffer: this.phiB } },
       ],
     });
     this.bindGroupBtoA = device.createBindGroup({
       layout: computeBGL,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaB } },
-        { binding: 2, resource: { buffer: this.etaA } },
+        { binding: 1, resource: { buffer: this.phiB } },
+        { binding: 2, resource: { buffer: this.phiA } },
       ],
     });
 
-    // --- Render pipeline (grain-colored) ---
-    const renderShader = device.createShaderModule({ code: renderGrainWGSL, label: 'gg-render' });
+    // --- Render pipeline ---
+    const renderModule = device.createShaderModule({ code: renderWGSL, label: 'gg-render' });
     const renderBGL = device.createBindGroupLayout({
       label: 'gg-render-bgl',
       entries: [
@@ -149,201 +186,124 @@ export class GrainGrowthSolver implements DiffusionEngine {
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
       ],
     });
-
     this.renderPipeline = device.createRenderPipeline({
       label: 'gg-render-pipeline',
       layout: device.createPipelineLayout({ bindGroupLayouts: [renderBGL] }),
-      vertex: { module: renderShader, entryPoint: 'vs_main' },
-      fragment: {
-        module: renderShader,
-        entryPoint: 'fs_main',
-        targets: [{ format: canvasFormat }],
-      },
+      vertex: { module: renderModule, entryPoint: 'vs_main' },
+      fragment: { module: renderModule, entryPoint: 'fs_main', targets: [{ format: canvasFormat }] },
     });
-
-    this.renderBindGroup = this.makeRenderBindGroup();
+    this.renderBG_A = this.makeRenderBindGroup(this.phiA);
+    this.renderBG_B = this.makeRenderBindGroup(this.phiB);
   }
 
-  /**
-   * Apply physics parameters from a grain growth config.
-   * Computes κ from interface width (fixes the under-resolved boundary bug)
-   * and L(T) from Arrhenius scaling.
-   */
-  updateGGConfig(config: GrainGrowthConfig): void {
-    const dx = computeDx(config.domainSize_m, config.gridWidth);
-
-    // Gradient coefficient κ in m² (same units as dx)
-    // so the shader's κ/dx² = ξ_m²·A/dx² = ξ_px²·A (correct dimensionless ratio)
-    const kappa = kappaFromInterfaceWidth(config.interfaceWidth_m, config.barrierA);
-
-    // L(T) via Arrhenius, normalized to T_ref = 800 K
-    const T_ref = 800;
-    const L = Math.exp(-config.material.Q_gb / (R_GAS * config.temperature_K))
-            / Math.exp(-config.material.Q_gb / (R_GAS * T_ref));
-
-    const dt = computeGGDt(L, kappa, config.barrierA, dx);
-
-    this._state.dx = dx;
+  /** Apply physics parameters. Recomputes dt and writes the GPU uniform buffer. */
+  updateGGConfig(config: GGConfig): void {
+    const dt = computeGGDt(config.kappa, config.W, config.A, config.numGrains, config.L);
     this._state.dt = dt;
-    this._state.diffusivity = L; // informational
-    this._state.r = 0;
 
-    this.writeUniforms(dx, dt, L, kappa, config.barrierA, config.crossB, config.numGrains);
-  }
-
-  private writeUniforms(
-    dx: number, dt: number, L: number, kappa: number,
-    A: number, B: number, N: number,
-  ): void {
     const buf = new ArrayBuffer(UNIFORM_SIZE);
-    const u32View = new Uint32Array(buf);
-    const f32View = new Float32Array(buf);
-    u32View[0] = this.width;
-    u32View[1] = this.height;
-    f32View[2] = dt;
-    f32View[3] = dx;
-    f32View[4] = L;
-    f32View[5] = kappa;
-    f32View[6] = A;
-    f32View[7] = B;
-    u32View[8] = N;
-    u32View[9] = 0;  // pad
-    u32View[10] = 0; // pad
-    u32View[11] = 0; // pad
+    const u32 = new Uint32Array(buf);
+    const f32 = new Float32Array(buf);
+    u32[0] = config.numGrains;
+    u32[1] = config.gridWidth;
+    f32[2] = dt;
+    f32[3] = config.kappa;
+    f32[4] = config.W;
+    f32[5] = config.A;
+    f32[6] = config.L;
+    f32[7] = 0; // _pad
     this.device.queue.writeBuffer(this.uniformBuffer, 0, buf);
   }
 
-  /** Load a packed field: Float32Array of size N × W × H. */
   loadField(data: Float32Array<ArrayBuffer>): void {
-    this.device.queue.writeBuffer(this.etaA, 0, data);
-    this.device.queue.writeBuffer(this.etaB, 0, new Float32Array(data.length) as Float32Array<ArrayBuffer>);
+    this.device.queue.writeBuffer(this.phiA, 0, data);
+    this.device.queue.writeBuffer(this.phiB, 0, new Float32Array(data.length) as Float32Array<ArrayBuffer>);
     this.parity = 0;
     this._state.stepsRun = 0;
     this._state.time = 0;
-    this.renderBindGroup = this.makeRenderBindGroup();
   }
 
   step(n: number): void {
     const encoder = this.device.createCommandEncoder({ label: 'gg-step' });
-    const pass = encoder.beginComputePass({ label: 'gg-compute' });
-    pass.setPipeline(this.computePipeline);
     const [wx, wy] = dispatchSize(this.width, this.height);
 
+    // Each step is its own compute pass. Separate beginComputePass/endComputePass
+    // calls provide the implicit memory barrier: step i+1 is guaranteed to see
+    // the phiOut values written by step i before it reads them as phiIn.
+    // (Within a single pass, dispatches are not ordered — never combine steps.)
     for (let i = 0; i < n; i++) {
       const bg = this.parity === 0 ? this.bindGroupAtoB : this.bindGroupBtoA;
+      const pass = encoder.beginComputePass({ label: 'gg-constrained' });
+      pass.setPipeline(this.computePipeline);
       pass.setBindGroup(0, bg);
       pass.dispatchWorkgroups(wx, wy);
+      pass.end();
       this.parity = 1 - this.parity;
     }
 
-    pass.end();
     this.device.queue.submit([encoder.finish()]);
     this._state.stepsRun += n;
     this._state.time += n * this._state.dt;
-    this.renderBindGroup = this.makeRenderBindGroup();
   }
 
   render(): void {
     const encoder = this.device.createCommandEncoder({ label: 'gg-render' });
-    const textureView = this.context.getCurrentTexture().createView();
+    const bg = this.parity === 0 ? this.renderBG_A : this.renderBG_B;
 
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: textureView,
+        view: this.context.getCurrentTexture().createView(),
         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
         loadOp: 'clear' as const,
         storeOp: 'store' as const,
       }],
     });
-
     pass.setPipeline(this.renderPipeline);
-    pass.setBindGroup(0, this.renderBindGroup);
+    pass.setBindGroup(0, bg);
     pass.draw(3);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
   }
 
-  /** Update material colors — for grain growth, this updates the color table. */
-  updateMaterialColors(colorA: [number, number, number], colorB: [number, number, number]): void {
-    // For grain growth, individual grain colors are set via setGrainColors
-    // This is a no-op to satisfy the interface — use setGrainColors instead
-    void colorA;
-    void colorB;
-  }
+  /** Not meaningful for GG (no scalar concentration). No-op for interface compatibility. */
+  updateMaterialColors(_colorA: [number, number, number], _colorB: [number, number, number]): void {}
 
-  /** Set the full grain color table (N × vec4f). */
-  setGrainColors(colors: Float32Array<ArrayBuffer>): void {
-    this.device.queue.writeBuffer(this.colorTableBuffer, 0, colors);
-  }
-
+  /** Read the full phi field [numGrains × W × H] f32 from GPU. Slow — diagnostics only. */
   async readField(): Promise<Float32Array> {
     const size = this.numGrains * this.width * this.height * BYTES_PER_CELL;
-    const stagingBuffer = this.device.createBuffer({
+    const staging = this.device.createBuffer({
       size,
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
     });
-
     const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(this.currentBuffer, 0, stagingBuffer, 0, size);
+    encoder.copyBufferToBuffer(this.currentBuffer, 0, staging, 0, size);
     this.device.queue.submit([encoder.finish()]);
 
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
-    const mapped = stagingBuffer.getMappedRange();
+    await staging.mapAsync(GPUMapMode.READ);
+    const mapped = staging.getMappedRange();
     const copy = new ArrayBuffer(mapped.byteLength);
     new Uint8Array(copy).set(new Uint8Array(mapped));
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
-
+    staging.unmap();
+    staging.destroy();
     return new Float32Array(copy);
   }
 
   destroy(): void {
-    this.etaA.destroy();
-    this.etaB.destroy();
+    this.phiA.destroy();
+    this.phiB.destroy();
     this.uniformBuffer.destroy();
+    this.renderUniformBuffer.destroy();
     this.colorTableBuffer.destroy();
   }
 
-  private makeRenderBindGroup(): GPUBindGroup {
-    const renderBGL = this.renderPipeline.getBindGroupLayout(0);
+  private makeRenderBindGroup(phiBuf: GPUBuffer): GPUBindGroup {
     return this.device.createBindGroup({
-      layout: renderBGL,
+      layout: this.renderPipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.currentBuffer } },
+        { binding: 0, resource: { buffer: this.renderUniformBuffer } },
+        { binding: 1, resource: { buffer: phiBuf } },
         { binding: 2, resource: { buffer: this.colorTableBuffer } },
       ],
     });
   }
-
-  /** Generate evenly-spaced HSL hues as default grain colors. */
-  private setDefaultColors(): void {
-    const colors = new Float32Array(this.numGrains * 4);
-    for (let i = 0; i < this.numGrains; i++) {
-      const hue = (i / this.numGrains) * 360;
-      const [r, g, b] = hslToRgb(hue, 0.7, 0.6);
-      colors[i * 4 + 0] = r;
-      colors[i * 4 + 1] = g;
-      colors[i * 4 + 2] = b;
-      colors[i * 4 + 3] = 1.0; // pad
-    }
-    this.device.queue.writeBuffer(this.colorTableBuffer, 0, colors);
-  }
-}
-
-/** Convert HSL to linear RGB. H in degrees, S and L in [0,1]. */
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-
-  let r = 0, g = 0, b = 0;
-  if (h < 60) { r = c; g = x; b = 0; }
-  else if (h < 120) { r = x; g = c; b = 0; }
-  else if (h < 180) { r = 0; g = c; b = x; }
-  else if (h < 240) { r = 0; g = x; b = c; }
-  else if (h < 300) { r = x; g = 0; b = c; }
-  else { r = c; g = 0; b = x; }
-
-  return [r + m, g + m, b + m];
 }

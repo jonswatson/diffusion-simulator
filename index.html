@@ -31,6 +31,7 @@
             <option value="fick" selected>Fick Diffusion</option>
             <option value="cahn-hilliard">Spinodal Decomposition</option>
             <option value="grain-growth">Grain Growth</option>
+            <option value="binary-solidification">Binary Solidification</option>
           </select>
         </label>
 
@@ -82,22 +83,10 @@
         <!-- Grain Growth-specific controls -->
         <div id="gg-controls" hidden>
           <h3>Grain Growth Parameters</h3>
-          <label>
-            Material
-            <select id="sel-gg-material">
-              <option value="Al-poly" selected>Aluminium</option>
-              <option value="Fe-poly">Iron</option>
-              <option value="Cu-poly">Copper</option>
-            </select>
-          </label>
-          <label>
-            Temperature: <span id="val-gg-temp">700</span> K
-            <input id="sl-gg-temp" type="range" min="300" max="1500" value="700" step="1" />
-          </label>
-          <label>
-            Interface width: <span id="val-gg-xi">2.3</span> &micro;m
-            <input id="sl-gg-xi" type="range" min="0.5" max="10.0" value="2.3" step="0.1" />
-          </label>
+          <p style="font-size:0.85em;color:#aaa;margin:0 0 0.5em">
+            Constrained Allen-Cahn model (&kappa; = W = A = L = 1, nondimensional).
+            &Sigma;&phi;<sub>i</sub> = 1 enforced at every pixel via simplex projection.
+          </p>
           <label>
             Grains
             <select id="sel-gg-grains">
@@ -106,6 +95,42 @@
               <option value="12">12</option>
               <option value="16">16</option>
             </select>
+          </label>
+          <button id="btn-gg-validate" style="margin-top:0.5em;width:100%">Run validation suite</button>
+        </div>
+
+        <!-- Binary Solidification-specific controls -->
+        <div id="solid-controls" hidden>
+          <h3>Solidification Parameters</h3>
+          <p style="font-size:0.85em;color:#aaa;margin:0 0 0.5em">
+            Coupled Allen-Cahn (&phi;) + conserved composition (c). Nondimensional.
+            &kappa;&phi;=1, w=1, L&phi;=1, A<sub>s</sub>=A<sub>l</sub>=2,
+            c<sub>s</sub>=0.3, c<sub>l</sub>=0.7.
+          </p>
+          <label>
+            Initial condition
+            <select id="sel-solid-ic">
+              <option value="seed" selected>Circular seed</option>
+              <option value="planar">Planar interface</option>
+              <option value="multi">Multi-seed (4)</option>
+            </select>
+          </label>
+          <label>
+            Alloy system
+            <select id="sel-solid-material">
+              <option value="symmetric" selected>Symmetric A-B</option>
+              <option value="dilute">Dilute solution (k=0.2)</option>
+              <option value="near-eutectic">Near-eutectic</option>
+              <option value="strong-partition">Strong partition (k=0.17)</option>
+            </select>
+          </label>
+          <label>
+            Undercooling &Delta;f: <span id="val-solid-undercooling">0.50</span>
+            <input id="sl-solid-undercooling" type="range" min="0" max="2" value="0.5" step="0.05" />
+          </label>
+          <label>
+            Seed radius: <span id="val-solid-seed-radius">15</span> %
+            <input id="sl-solid-seed-radius" type="range" min="3" max="35" value="15" step="1" />
           </label>
         </div>
 
@@ -161,6 +186,8 @@
         <table>
           <tr><td id="lbl-mass-error">Mass drift</td><td id="info-mass-error">—</td></tr>
           <tr><td>RMS vs erfc</td><td id="info-rms-error">—</td></tr>
+          <tr id="row-simplex-residual" hidden><td>&Sigma;&phi;<sub>i</sub>−1 max</td><td id="info-simplex-residual">—</td></tr>
+          <tr id="row-min-max-phi" hidden><td>min/max &phi;</td><td id="info-min-max-phi">—</td></tr>
         </table>
         <div id="warnings"></div>
       </div>
