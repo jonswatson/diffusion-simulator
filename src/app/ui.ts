@@ -13,7 +13,7 @@
 
 import {
   FickSolver, CahnHilliardSolver, GrainGrowthSolver, BinarySolidificationSolver,
-  MATERIALS, CH_MATERIALS, DEFAULT_SOLID_CONFIG,
+  MATERIALS, CH_MATERIALS, DEFAULT_SOLID_CONFIG, SOLID_MATERIALS,
 } from '../engine';
 import type { SimConfig, CahnHilliardConfig, GGConfig, SolidificationConfig } from '../engine';
 import type { SimMode, DiffusionEngine } from '../engine/types';
@@ -89,6 +89,11 @@ export function initUI(ctx: UIContext): FrameCallback {
 
   // Solidification-specific
   const selSolidIC = $<HTMLSelectElement>('sel-solid-ic');
+  const selSolidMaterial = $<HTMLSelectElement>('sel-solid-material');
+  const slSolidUndercooling = $<HTMLInputElement>('sl-solid-undercooling');
+  const valSolidUndercooling = $<HTMLSpanElement>('val-solid-undercooling');
+  const slSolidSeedRadius = $<HTMLInputElement>('sl-solid-seed-radius');
+  const valSolidSeedRadius = $<HTMLSpanElement>('val-solid-seed-radius');
 
   // Domain / grid
   const selDomain = $<HTMLSelectElement>('sel-domain');
@@ -198,11 +203,21 @@ export function initUI(ctx: UIContext): FrameCallback {
     };
   }
 
-  /** Build a solidification config from defaults (no user-tunable params in MVP). */
+  /** Build a solidification config from current UI state. */
   function makeSolidConfig(): SolidificationConfig {
+    const mat = SOLID_MATERIALS[selSolidMaterial.value];
     return {
       mode: 'binary-solidification',
-      ...DEFAULT_SOLID_CONFIG,
+      kappa_phi: DEFAULT_SOLID_CONFIG.kappa_phi,
+      w: DEFAULT_SOLID_CONFIG.w,
+      Lphi: DEFAULT_SOLID_CONFIG.Lphi,
+      As: mat.As,
+      Al: mat.Al,
+      cs_eq: mat.cs_eq,
+      cl_eq: mat.cl_eq,
+      Ms: DEFAULT_SOLID_CONFIG.Ms,
+      Ml: DEFAULT_SOLID_CONFIG.Ml,
+      deltaF: parseFloat(slSolidUndercooling.value),
       gridWidth: currentGridWidth,
     };
   }
@@ -290,14 +305,16 @@ export function initUI(ctx: UIContext): FrameCallback {
       }
       case 'binary-solidification': {
         const cfg = makeSolidConfig();
+        const mat = SOLID_MATERIALS[selSolidMaterial.value];
         const ic = selSolidIC.value;
+        const seedRadiusPx = (parseInt(slSolidSeedRadius.value, 10) / 100) * currentGridWidth;
         if (ic === 'planar') {
           field = generatePlanarSolidInterface(currentGridWidth, cfg.cs_eq, cfg.cl_eq);
         } else if (ic === 'multi') {
-          field = generateMultiSeed(currentGridWidth, 4, currentGridWidth / 10, 0.6, cfg.cs_eq);
+          field = generateMultiSeed(currentGridWidth, 4, seedRadiusPx, mat.c0, cfg.cs_eq);
         } else {
           // 'seed' — default
-          field = generateSolidSeed(currentGridWidth, currentGridWidth / 6, 0.6, cfg.cs_eq, cfg.cl_eq);
+          field = generateSolidSeed(currentGridWidth, seedRadiusPx, mat.c0, cfg.cs_eq, cfg.cl_eq);
         }
         break;
       }
@@ -455,9 +472,24 @@ export function initUI(ctx: UIContext): FrameCallback {
     }
   });
 
-  // ---- Solidification IC selector ----
+  // ---- Solidification controls ----
   selSolidIC.addEventListener('change', () => {
     resetField();
+  });
+
+  selSolidMaterial.addEventListener('change', () => {
+    applyConfig();
+    resetField();
+  });
+
+  slSolidUndercooling.addEventListener('input', () => {
+    valSolidUndercooling.textContent = parseFloat(slSolidUndercooling.value).toFixed(2);
+    applyConfig();
+  });
+
+  slSolidSeedRadius.addEventListener('input', () => {
+    valSolidSeedRadius.textContent = slSolidSeedRadius.value;
+    // Seed size only takes effect on next reset — no applyConfig needed
   });
 
   // ---- GG controls ----

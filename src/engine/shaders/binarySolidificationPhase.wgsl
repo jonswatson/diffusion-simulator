@@ -1,11 +1,14 @@
 // ============================================================
 // Binary Solidification — Pass 2: Phase field update
 //
-// Allen-Cahn equation for the solid fraction φ:
-//   ∂φ/∂t = Lphi · [κ_φ · ∇²φ − dF/dφ]
+// Allen-Cahn equation for the solid fraction φ with undercooling driving force:
+//   ∂φ/∂t = Lphi · [κ_φ · ∇²φ − dF/dφ + Δf]
+//
+// Δf (delta_f) is a dimensionless undercooling: >0 drives solidification,
+// 0 restores symmetric equilibrium (seed dissolves), <0 drives melting.
 //
 // Discretization (explicit Euler, dx = 1 nondimensional):
-//   φ_new = φ + Lphi · dt · (κ_φ · ∇²φ − dfdphi)
+//   φ_new = φ + Lphi · dt · (κ_φ · ∇²φ − dfdphi + delta_f)
 //
 // ∇²φ via 5-point Laplacian with zero-flux Neumann BCs (clamped indices):
 //   ∇²φ ≈ φ[x+1,y] + φ[x-1,y] + φ[x,y+1] + φ[x,y-1] − 4·φ[x,y]
@@ -30,7 +33,7 @@ struct Uniforms {
   cl_eq    : f32,
   Ms       : f32,
   Ml       : f32,
-  _pad1    : f32,
+  delta_f  : f32,   // dimensionless undercooling driving force (>0 drives solidification)
   _pad2    : f32,
   _pad3    : f32,
 }
@@ -63,9 +66,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
               + phi_in[idx(x, yp)] + phi_in[idx(x, ym)]
               - 4.0 * phi;
 
-  // Allen-Cahn explicit Euler step
+  // Allen-Cahn explicit Euler step with undercooling driving force
+  // delta_f > 0 tilts the double-well toward solid, driving growth
   let phi_new = phi + uniforms.Lphi * uniforms.dt
-              * (uniforms.kappa_phi * lap_phi - dfdphi_in[idx(x, y)]);
+              * (uniforms.kappa_phi * lap_phi - dfdphi_in[idx(x, y)] + uniforms.delta_f);
 
   // Clamp to physical range [0, 1]
   phi_out[idx(x, y)] = clamp(phi_new, 0.0, 1.0);

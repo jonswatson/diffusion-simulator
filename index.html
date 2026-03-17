@@ -115,6 +115,23 @@
               <option value="multi">Multi-seed (4)</option>
             </select>
           </label>
+          <label>
+            Alloy system
+            <select id="sel-solid-material">
+              <option value="symmetric" selected>Symmetric A-B</option>
+              <option value="dilute">Dilute solution (k=0.2)</option>
+              <option value="near-eutectic">Near-eutectic</option>
+              <option value="strong-partition">Strong partition (k=0.17)</option>
+            </select>
+          </label>
+          <label>
+            Undercooling &Delta;f: <span id="val-solid-undercooling">0.50</span>
+            <input id="sl-solid-undercooling" type="range" min="0" max="2" value="0.5" step="0.05" />
+          </label>
+          <label>
+            Seed radius: <span id="val-solid-seed-radius">15</span> %
+            <input id="sl-solid-seed-radius" type="range" min="3" max="35" value="15" step="1" />
+          </label>
         </div>
 
         <h3>Domain</h3>

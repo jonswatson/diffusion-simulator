@@ -142,12 +142,50 @@ export interface GGConfig {
 }
 
 /**
+ * Preset binary alloy system for solidification.
+ * cs_eq / cl_eq are equilibrium solid/liquid compositions at the solidus/liquidus.
+ * As / Al are the parabolic free energy curvatures (higher = stiffer).
+ * c0 is the nominal alloy composition for the initial condition.
+ * All values are nondimensional.
+ */
+export interface SolidificationMaterial {
+  name: string;
+  symbol: string;
+  cs_eq: number; // equilibrium solid composition (mole fraction)
+  cl_eq: number; // equilibrium liquid composition (mole fraction)
+  As: number;    // curvature of solid free energy fs(c) = As·(c−cs_eq)²
+  Al: number;    // curvature of liquid free energy fl(c) = Al·(c−cl_eq)²
+  c0: number;    // nominal alloy composition for initial condition
+}
+
+export const SOLID_MATERIALS: Record<string, SolidificationMaterial> = {
+  'symmetric': {
+    name: 'Symmetric A-B', symbol: 'A-B',
+    cs_eq: 0.30, cl_eq: 0.70, As: 2.0, Al: 2.0, c0: 0.60,
+  },
+  'dilute': {
+    name: 'Dilute solution (k=0.2)', symbol: 'A-B (dilute)',
+    cs_eq: 0.05, cl_eq: 0.25, As: 4.0, Al: 2.0, c0: 0.15,
+  },
+  'near-eutectic': {
+    name: 'Near-eutectic', symbol: 'A-B (eut.)',
+    cs_eq: 0.45, cl_eq: 0.55, As: 3.0, Al: 3.0, c0: 0.50,
+  },
+  'strong-partition': {
+    name: 'Strong partition (k=0.17)', symbol: 'A-B (k≪1)',
+    cs_eq: 0.10, cl_eq: 0.60, As: 2.0, Al: 1.5, c0: 0.40,
+  },
+};
+
+/**
  * Binary alloy solidification config.
  * Coupled Allen-Cahn (φ, non-conserved) + diffusion (c, conserved).
  * All parameters are nondimensional (dx = 1 implicit).
  *
  * Free energy: f = h(φ)·As·(c−cs_eq)² + (1−h(φ))·Al·(c−cl_eq)² + w·g(φ)
  * where h(φ) = φ²(3−2φ), g(φ) = φ²(1−φ)²
+ * Phase update: ∂φ/∂t = Lphi·[κ∇²φ − dF/dφ + deltaF]
+ * deltaF is a dimensionless undercooling driving force (>0 → grow solid).
  */
 export interface SolidificationConfig {
   mode: 'binary-solidification';
@@ -160,6 +198,7 @@ export interface SolidificationConfig {
   cl_eq: number;     // equilibrium liquid composition (mole fraction)
   Ms: number;        // composition mobility in solid phase
   Ml: number;        // composition mobility in liquid phase
+  deltaF: number;    // dimensionless undercooling driving force (>0 drives solidification)
   gridWidth: number; // pixels (square grid)
 }
 
@@ -174,6 +213,7 @@ export const DEFAULT_SOLID_CONFIG: Omit<SolidificationConfig, 'mode' | 'gridWidt
   cl_eq: 0.7,
   Ms: 0.01,
   Ml: 1.0,
+  deltaF: 0.5,
 };
 
 /** Legacy SimConfig for backward compatibility with Fick-only code. */

@@ -318,7 +318,7 @@ export class BinarySolidificationSolver implements DiffusionEngine {
     f32v[10] = config.cl_eq;
     f32v[11] = config.Ms;
     f32v[12] = config.Ml;
-    f32v[13] = 0; // _pad1
+    f32v[13] = config.deltaF;
     f32v[14] = 0; // _pad2
     f32v[15] = 0; // _pad3
     this.device.queue.writeBuffer(this.uniformBuffer, 0, buf);
