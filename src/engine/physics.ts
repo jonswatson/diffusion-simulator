@@ -92,22 +92,6 @@ export function computeCHDt(
   return safetyFactor * Math.min(dtBiharmonic, dtReaction);
 }
 
-/**
- * Maximum stable timestep for explicit FTCS Allen-Cahn (grain growth).
- *
- * Allen-Cahn has two competing stability constraints:
- *   1. Diffusive: dt ≤ dx² / (4·L·κ) — from κ·∇²η
- *   2. Reactive:  dt ≤ 1 / (L·2A) — from the double-well derivative
- * Take the minimum and apply a safety factor.
- */
-export function computeGGDt(
-  L: number, kappa: number, A: number, dx: number, safetyFactor = 0.2,
-): number {
-  const dtDiffusion = (dx * dx) / (4.0 * L * kappa);
-  const dtReaction = 1.0 / (L * 2.0 * A);
-  return safetyFactor * Math.min(dtDiffusion, dtReaction);
-}
-
 // ============================================================
 // Regular solution / interface width helpers
 // ============================================================
@@ -138,18 +122,16 @@ export function epsilonSqFromInterfaceWidth(xi: number, A_eff: number): number {
 }
 
 /**
- * Allen-Cahn gradient coefficient κ from interface width (in grid cells).
- *
- * For a single-well f(η) = A·η²·(1−η)², the equilibrium interface width
- * is ξ_eq = √(κ/A). Inverting:
- *
- *   κ = ξ² · A
- *
- * Unit-agnostic: pass ξ in any consistent unit system (meters, pixels, etc.);
- * result is in ξ² units. When ξ is in meters the result is m², matching dx.
+ * Maximum stable timestep for explicit Euler Allen-Cahn grain growth (nondimensional, dx=1).
+ * Stiffness from Laplacian: 4κ. Bulk reaction: W/2. Interaction: 2A·(N−1).
+ * dt ≤ safetyFactor / (L · (4κ + W/2 + 2A·(numGrains − 1)))
  */
-export function kappaFromInterfaceWidth(xi: number, A: number): number {
-  return xi * xi * A;
+export function computeGGDt(
+  kappa: number, W: number, A: number, numGrains: number,
+  L: number, safetyFactor = 0.1,
+): number {
+  const stiffness = 4.0 * kappa + W / 2.0 + 2.0 * A * (numGrains - 1);
+  return safetyFactor / (L * stiffness);
 }
 
 // ============================================================

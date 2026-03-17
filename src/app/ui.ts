@@ -5,20 +5,23 @@
 // decomposition, and Allen-Cahn grain growth.
 //
 // Temperature cascade (Fick): T -> D(T) -> dt -> r -> writeBuffer
-// CH/GG: material + temperature + interface width → physical params
+// CH: material + temperature + interface width → physical params
+// GG: numGrains (nondimensional, kappa=W=A=L=1 defaults)
 // Grid/domain/mode change: full engine recreation (new buffers).
 // ============================================================
 
 import {
   FickSolver, CahnHilliardSolver, GrainGrowthSolver,
-  MATERIALS, CH_MATERIALS, GG_MATERIALS,
+  MATERIALS, CH_MATERIALS,
 } from '../engine';
-import type { SimConfig, CahnHilliardConfig, GrainGrowthConfig } from '../engine';
+import type { SimConfig, CahnHilliardConfig, GGConfig } from '../engine';
 import type { SimMode, DiffusionEngine } from '../engine/types';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
-import { generateSpinodalField, generateSmoothVoronoiField, generateGrainColors } from './initialConditions';
+import { generateSpinodalField, generateVoronoiField } from './initialConditions';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
+import type { GGValidationParams } from './validation';
+import { runGGValidationSuite } from '../engine/ggPhysicsTests';
 
 export interface UIContext {
   solver: DiffusionEngine;
@@ -78,12 +81,8 @@ export function initUI(ctx: UIContext): FrameCallback {
   const chSpinodalWarning = $<HTMLDivElement>('ch-spinodal-warning');
 
   // Grain Growth-specific
-  const selGGMaterial = $<HTMLSelectElement>('sel-gg-material');
-  const slGGTemp = $<HTMLInputElement>('sl-gg-temp');
-  const valGGTemp = $<HTMLSpanElement>('val-gg-temp');
-  const slGGXi = $<HTMLInputElement>('sl-gg-xi');
-  const valGGXi = $<HTMLSpanElement>('val-gg-xi');
   const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
+  const btnGGValidate = $<HTMLButtonElement>('btn-gg-validate');
 
   // Domain / grid
   const selDomain = $<HTMLSelectElement>('sel-domain');
@@ -104,6 +103,10 @@ export function initUI(ctx: UIContext): FrameCallback {
   const lblMassError = $('lbl-mass-error');
   const infoMassError = $('info-mass-error');
   const infoRmsError = $('info-rms-error');
+  const infoSimplexResidual = $('info-simplex-residual');
+  const infoMinMaxPhi = $('info-min-max-phi');
+  const rowSimplexResidual = $('row-simplex-residual');
+  const rowMinMaxPhi = $('row-min-max-phi');
   const warningsDiv = $('warnings');
 
   // Validation state
@@ -115,6 +118,12 @@ export function initUI(ctx: UIContext): FrameCallback {
   let currentTemperature = parseInt(slTemperature.value, 10);
   let currentDomainSize = parseFloat(selDomain.value);
   let currentGridWidth = parseInt(selGrid.value, 10);
+
+  // GG nondimensional defaults
+  const GG_KAPPA = 1.0;
+  const GG_W = 1.0;
+  const GG_A = 1.0;
+  const GG_L = 1.0;
 
   // ---- Engine factory ----
 
@@ -169,16 +178,14 @@ export function initUI(ctx: UIContext): FrameCallback {
   }
 
   /** Build a GG config from current UI state. */
-  function makeGGConfig(): GrainGrowthConfig {
+  function makeGGConfig(): GGConfig {
     return {
       mode: 'grain-growth',
-      material: GG_MATERIALS[selGGMaterial.value],
-      temperature_K: parseInt(slGGTemp.value, 10),
-      interfaceWidth_m: parseFloat(slGGXi.value) * 1e-6, // µm → m
-      barrierA: 1.0,
-      crossB: 1.0,
       numGrains: parseInt(selGGGrains.value, 10),
-      domainSize_m: currentDomainSize,
+      kappa: GG_KAPPA,
+      W: GG_W,
+      A: GG_A,
+      L: GG_L,
       gridWidth: currentGridWidth,
     };
   }
@@ -223,7 +230,6 @@ export function initUI(ctx: UIContext): FrameCallback {
       case 'cahn-hilliard': {
         const config = makeCHConfig();
         (ctx.solver as CahnHilliardSolver).updateCHConfig(config);
-        // Use material colors from CH database
         const mat = CH_MATERIALS[selCHMaterial.value];
         ctx.solver.updateMaterialColors(mat.colorA, mat.colorB);
         updateCHSpinodalWarning();
@@ -256,12 +262,7 @@ export function initUI(ctx: UIContext): FrameCallback {
       }
       case 'grain-growth': {
         const numGrains = parseInt(selGGGrains.value, 10);
-        const xi_px = parseFloat(slGGXi.value) * 1e-6
-          / (currentDomainSize / currentGridWidth);
-        field = generateSmoothVoronoiField(currentGridWidth, numGrains, xi_px);
-        // Also set grain colors
-        const colors = generateGrainColors(numGrains) as Float32Array<ArrayBuffer>;
-        (ctx.solver as GrainGrowthSolver).setGrainColors(colors);
+        field = generateVoronoiField(currentGridWidth, numGrains);
         break;
       }
     }
@@ -302,13 +303,16 @@ export function initUI(ctx: UIContext): FrameCallback {
       .join('');
   }
 
-  /** Show/hide mode-specific control sections. */
+  /** Show/hide mode-specific control sections and diagnostic rows. */
   function updateModeVisibility(): void {
     fickControls.hidden = currentMode !== 'fick';
     chControls.hidden = currentMode !== 'cahn-hilliard';
     ggControls.hidden = currentMode !== 'grain-growth';
     // Image upload is only useful for Fick
     lblImageUpload.hidden = currentMode !== 'fick';
+    // Simplex diagnostics only meaningful for GG
+    rowSimplexResidual.hidden = currentMode !== 'grain-growth';
+    rowMinMaxPhi.hidden = currentMode !== 'grain-growth';
   }
 
   /** Mode display name for the info panel. */
@@ -388,18 +392,32 @@ export function initUI(ctx: UIContext): FrameCallback {
     // Mean phi only affects the IC, not the running sim config
   });
 
+  // ---- GG validation suite ----
+  btnGGValidate.addEventListener('click', async () => {
+    const wasPlaying = ctx.loop.playing;
+    if (wasPlaying) ctx.loop.pause();
+    btnGGValidate.disabled = true;
+    btnGGValidate.textContent = 'Running…';
+    warningsDiv.innerHTML = '<div class="warning">Running physics validation suite (may take ~30 s)…</div>';
+
+    try {
+      const results = await runGGValidationSuite(ctx.device, ctx.canvasFormat);
+      const html = results.map(r => {
+        const icon = r.passed ? '✓' : '✗';
+        const cls = r.passed ? 'info' : 'warning';
+        return `<div class="${cls}">${icon} <strong>${r.name}</strong>: ${r.reason}</div>`;
+      }).join('');
+      warningsDiv.innerHTML = html;
+    } catch (e) {
+      warningsDiv.innerHTML = `<div class="warning">Validation error: ${String(e)}</div>`;
+    } finally {
+      btnGGValidate.disabled = false;
+      btnGGValidate.textContent = 'Run validation suite';
+      if (wasPlaying) ctx.loop.play();
+    }
+  });
+
   // ---- GG controls ----
-  selGGMaterial.addEventListener('change', () => {
-    applyConfig();
-  });
-  slGGTemp.addEventListener('input', () => {
-    valGGTemp.textContent = slGGTemp.value;
-    applyConfig();
-  });
-  slGGXi.addEventListener('input', () => {
-    valGGXi.textContent = slGGXi.value;
-    applyConfig();
-  });
   selGGGrains.addEventListener('change', () => {
     // Changing grain count requires engine recreation (buffer size changes)
     const wasPlaying = ctx.loop.playing;
@@ -498,30 +516,37 @@ export function initUI(ctx: UIContext): FrameCallback {
 
     // Validation readouts — mode-dependent
     if (currentMode === 'grain-growth') {
-      // Allen-Cahn is nonconserved; show Ση_i constraint instead of mass drift
-      lblMassError.textContent = '\u03A3\u03B7\u1D62 error';
-      infoMassError.textContent = validation.lastSumEtaError > 0
-        ? validation.lastSumEtaError.toFixed(4)
+      lblMassError.textContent = 'Grains';
+      infoMassError.textContent = validation.lastGrainCount > 0
+        ? String(validation.lastGrainCount)
+        : '\u2014';
+      // Repurpose RMS slot for full free energy
+      infoRmsError.textContent = validation.lastFreeEnergy > 0
+        ? sci(validation.lastFreeEnergy, 3)
+        : '\u2014';
+      // GG-specific rows
+      infoSimplexResidual.textContent = validation.lastCheckStep > 0
+        ? sci(validation.lastSimplexResidual, 2)
+        : '\u2014';
+      infoMinMaxPhi.textContent = validation.lastCheckStep > 0
+        ? `${validation.lastMinPhi.toFixed(4)} / ${validation.lastMaxPhi.toFixed(4)}`
         : '\u2014';
     } else {
       lblMassError.textContent = 'Mass drift';
       infoMassError.textContent = validation.lastMassError > 0
         ? `${(validation.lastMassError * 100).toFixed(4)}%`
         : '\u2014';
-    }
-
-    // RMS vs erfc is only valid for Fick mode
-    if (currentMode === 'fick') {
-      infoRmsError.textContent = validation.lastAnalyticalRMS > 0
+      infoRmsError.textContent = currentMode === 'fick' && validation.lastAnalyticalRMS > 0
         ? `${(validation.lastAnalyticalRMS * 100).toFixed(2)}%`
         : '\u2014';
-    } else {
-      infoRmsError.textContent = '\u2014';
     }
 
     // Run async validation checks (throttled internally)
     if (state.stepsRun > 0) {
-      runValidationChecks(validation, ctx.solver, currentGridWidth, currentMode);
+      const ggParams: GGValidationParams | undefined = currentMode === 'grain-growth'
+        ? { numGrains: parseInt(selGGGrains.value, 10), kappa: GG_KAPPA, W: GG_W, A: GG_A }
+        : undefined;
+      runValidationChecks(validation, ctx.solver, currentGridWidth, currentMode, ggParams);
     }
   };
 }
