@@ -2,23 +2,25 @@
 // UI wiring — connects DOM controls to the engine and loop.
 //
 // Mode-aware: handles Fick diffusion, Cahn-Hilliard spinodal
-// decomposition, and Allen-Cahn grain growth.
+// decomposition, Allen-Cahn grain growth, and binary solidification.
 //
 // Temperature cascade (Fick): T -> D(T) -> dt -> r -> writeBuffer
 // CH: material + temperature + interface width → physical params
 // GG: numGrains (nondimensional, kappa=W=A=L=1 defaults)
+// Solidification: Allen-Cahn φ + conserved composition c
 // Grid/domain/mode change: full engine recreation (new buffers).
 // ============================================================
 
 import {
-  FickSolver, CahnHilliardSolver, GrainGrowthSolver,
-  MATERIALS, CH_MATERIALS,
+  FickSolver, CahnHilliardSolver, GrainGrowthSolver, BinarySolidificationSolver,
+  MATERIALS, CH_MATERIALS, DEFAULT_SOLID_CONFIG,
 } from '../engine';
-import type { SimConfig, CahnHilliardConfig, GGConfig } from '../engine';
+import type { SimConfig, CahnHilliardConfig, GGConfig, SolidificationConfig } from '../engine';
 import type { SimMode, DiffusionEngine } from '../engine/types';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
 import { generateSpinodalField, generateVoronoiField } from './initialConditions';
+import { generateSolidSeed, generatePlanarSolidInterface, generateMultiSeed } from './binarySolidificationInit';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
 import type { GGValidationParams } from './validation';
 import { runGGValidationSuite } from '../engine/ggPhysicsTests';
@@ -63,6 +65,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   const fickControls = $<HTMLDivElement>('fick-controls');
   const chControls = $<HTMLDivElement>('ch-controls');
   const ggControls = $<HTMLDivElement>('gg-controls');
+  const solidControls = $<HTMLDivElement>('solid-controls');
   const lblImageUpload = $<HTMLLabelElement>('lbl-image-upload');
 
   // Fick-specific
@@ -83,6 +86,9 @@ export function initUI(ctx: UIContext): FrameCallback {
   // Grain Growth-specific
   const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
   const btnGGValidate = $<HTMLButtonElement>('btn-gg-validate');
+
+  // Solidification-specific
+  const selSolidIC = $<HTMLSelectElement>('sel-solid-ic');
 
   // Domain / grid
   const selDomain = $<HTMLSelectElement>('sel-domain');
@@ -139,6 +145,8 @@ export function initUI(ctx: UIContext): FrameCallback {
         const numGrains = parseInt(selGGGrains.value, 10);
         return new GrainGrowthSolver({ ...base, numGrains });
       }
+      case 'binary-solidification':
+        return new BinarySolidificationSolver(base);
     }
   }
 
@@ -186,6 +194,15 @@ export function initUI(ctx: UIContext): FrameCallback {
       W: GG_W,
       A: GG_A,
       L: GG_L,
+      gridWidth: currentGridWidth,
+    };
+  }
+
+  /** Build a solidification config from defaults (no user-tunable params in MVP). */
+  function makeSolidConfig(): SolidificationConfig {
+    return {
+      mode: 'binary-solidification',
+      ...DEFAULT_SOLID_CONFIG,
       gridWidth: currentGridWidth,
     };
   }
@@ -242,6 +259,12 @@ export function initUI(ctx: UIContext): FrameCallback {
         warningsDiv.innerHTML = '';
         break;
       }
+      case 'binary-solidification': {
+        const config = makeSolidConfig();
+        (ctx.solver as BinarySolidificationSolver).updateSolidConfig(config);
+        warningsDiv.innerHTML = '';
+        break;
+      }
     }
   }
 
@@ -263,6 +286,19 @@ export function initUI(ctx: UIContext): FrameCallback {
       case 'grain-growth': {
         const numGrains = parseInt(selGGGrains.value, 10);
         field = generateVoronoiField(currentGridWidth, numGrains);
+        break;
+      }
+      case 'binary-solidification': {
+        const cfg = makeSolidConfig();
+        const ic = selSolidIC.value;
+        if (ic === 'planar') {
+          field = generatePlanarSolidInterface(currentGridWidth, cfg.cs_eq, cfg.cl_eq);
+        } else if (ic === 'multi') {
+          field = generateMultiSeed(currentGridWidth, 4, currentGridWidth / 10, 0.6, cfg.cs_eq);
+        } else {
+          // 'seed' — default
+          field = generateSolidSeed(currentGridWidth, currentGridWidth / 6, 0.6, cfg.cs_eq, cfg.cl_eq);
+        }
         break;
       }
     }
@@ -308,6 +344,7 @@ export function initUI(ctx: UIContext): FrameCallback {
     fickControls.hidden = currentMode !== 'fick';
     chControls.hidden = currentMode !== 'cahn-hilliard';
     ggControls.hidden = currentMode !== 'grain-growth';
+    solidControls.hidden = currentMode !== 'binary-solidification';
     // Image upload is only useful for Fick
     lblImageUpload.hidden = currentMode !== 'fick';
     // Simplex diagnostics only meaningful for GG
@@ -321,6 +358,7 @@ export function initUI(ctx: UIContext): FrameCallback {
       case 'fick': return 'Fick';
       case 'cahn-hilliard': return 'Spinodal';
       case 'grain-growth': return 'Grain Growth';
+      case 'binary-solidification': return 'Solidification';
     }
   }
 
@@ -417,6 +455,11 @@ export function initUI(ctx: UIContext): FrameCallback {
     }
   });
 
+  // ---- Solidification IC selector ----
+  selSolidIC.addEventListener('change', () => {
+    resetField();
+  });
+
   // ---- GG controls ----
   selGGGrains.addEventListener('change', () => {
     // Changing grain count requires engine recreation (buffer size changes)
@@ -508,9 +551,16 @@ export function initUI(ctx: UIContext): FrameCallback {
       infoR.textContent = '\u2014';
     }
 
-    infoDt.textContent = `${sci(state.dt)} s`;
-    infoDx.textContent = `${sci(state.dx)} m`;
-    infoTime.textContent = formatTime(state.time);
+    // dt display: solidification is nondimensional — show raw value
+    infoDt.textContent = currentMode === 'binary-solidification'
+      ? sci(state.dt)
+      : `${sci(state.dt)} s`;
+    infoDx.textContent = currentMode === 'binary-solidification'
+      ? '1 (nondim)'
+      : `${sci(state.dx)} m`;
+    infoTime.textContent = currentMode === 'binary-solidification'
+      ? sci(state.time)
+      : formatTime(state.time);
     infoSteps.textContent = info.stepsRun.toLocaleString();
     infoFps.textContent = `${info.fps.toFixed(0)}`;
 

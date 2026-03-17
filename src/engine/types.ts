@@ -5,7 +5,7 @@
 // DiffusionEngine so the app layer can swap them freely.
 // ============================================================
 
-export type SimMode = 'fick' | 'cahn-hilliard' | 'grain-growth';
+export type SimMode = 'fick' | 'cahn-hilliard' | 'grain-growth' | 'binary-solidification';
 
 /** CPU-side simulation state. No GPU readback needed. */
 export interface EngineState {

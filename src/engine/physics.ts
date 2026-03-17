@@ -134,6 +134,25 @@ export function computeGGDt(
   return safetyFactor / (L * stiffness);
 }
 
+/**
+ * Maximum stable timestep for explicit Euler binary solidification (nondimensional, dx=1).
+ *
+ * Two constraints:
+ *   1. Phase field (Allen-Cahn): dt ≤ safetyFactor / (Lphi · (4·kappa_phi + w))
+ *      (Laplacian stiffness 4·kappa + double-well barrier w)
+ *   2. Composition (diffusion): dt ≤ safetyFactor / (4 · Ml · 2·max(As, Al))
+ *      (effective diffusivity Ml·d²μc/dc², d²μc/dc² ≤ 2·max(As,Al))
+ */
+export function computeSolidificationDt(
+  kappa_phi: number, w: number, Lphi: number,
+  As: number, Al: number, Ml: number,
+  safetyFactor = 0.1,
+): number {
+  const dtPhase = safetyFactor / (Lphi * (4.0 * kappa_phi + w));
+  const dtComp  = safetyFactor / (4.0 * Ml * 2.0 * Math.max(As, Al));
+  return Math.min(dtPhase, dtComp);
+}
+
 // ============================================================
 // Extension path: Cahn–Hilliard phase field model
 //

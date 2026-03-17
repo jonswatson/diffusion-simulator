@@ -31,6 +31,7 @@
             <option value="fick" selected>Fick Diffusion</option>
             <option value="cahn-hilliard">Spinodal Decomposition</option>
             <option value="grain-growth">Grain Growth</option>
+            <option value="binary-solidification">Binary Solidification</option>
           </select>
         </label>
 
@@ -96,6 +97,24 @@
             </select>
           </label>
           <button id="btn-gg-validate" style="margin-top:0.5em;width:100%">Run validation suite</button>
+        </div>
+
+        <!-- Binary Solidification-specific controls -->
+        <div id="solid-controls" hidden>
+          <h3>Solidification Parameters</h3>
+          <p style="font-size:0.85em;color:#aaa;margin:0 0 0.5em">
+            Coupled Allen-Cahn (&phi;) + conserved composition (c). Nondimensional.
+            &kappa;&phi;=1, w=1, L&phi;=1, A<sub>s</sub>=A<sub>l</sub>=2,
+            c<sub>s</sub>=0.3, c<sub>l</sub>=0.7.
+          </p>
+          <label>
+            Initial condition
+            <select id="sel-solid-ic">
+              <option value="seed" selected>Circular seed</option>
+              <option value="planar">Planar interface</option>
+              <option value="multi">Multi-seed (4)</option>
+            </select>
+          </label>
         </div>
 
         <h3>Domain</h3>

@@ -141,6 +141,41 @@ export interface GGConfig {
   gridWidth: number; // pixels (square grid)
 }
 
+/**
+ * Binary alloy solidification config.
+ * Coupled Allen-Cahn (φ, non-conserved) + diffusion (c, conserved).
+ * All parameters are nondimensional (dx = 1 implicit).
+ *
+ * Free energy: f = h(φ)·As·(c−cs_eq)² + (1−h(φ))·Al·(c−cl_eq)² + w·g(φ)
+ * where h(φ) = φ²(3−2φ), g(φ) = φ²(1−φ)²
+ */
+export interface SolidificationConfig {
+  mode: 'binary-solidification';
+  kappa_phi: number; // gradient energy coefficient for phase field
+  w: number;         // double-well barrier height
+  Lphi: number;      // Allen-Cahn kinetic coefficient
+  As: number;        // curvature of solid free energy [nondimensional]
+  Al: number;        // curvature of liquid free energy [nondimensional]
+  cs_eq: number;     // equilibrium solid composition (mole fraction)
+  cl_eq: number;     // equilibrium liquid composition (mole fraction)
+  Ms: number;        // composition mobility in solid phase
+  Ml: number;        // composition mobility in liquid phase
+  gridWidth: number; // pixels (square grid)
+}
+
+/** Default solidification parameters (nondimensional). */
+export const DEFAULT_SOLID_CONFIG: Omit<SolidificationConfig, 'mode' | 'gridWidth'> = {
+  kappa_phi: 1.0,
+  w: 1.0,
+  Lphi: 1.0,
+  As: 2.0,
+  Al: 2.0,
+  cs_eq: 0.3,
+  cl_eq: 0.7,
+  Ms: 0.01,
+  Ml: 1.0,
+};
+
 /** Legacy SimConfig for backward compatibility with Fick-only code. */
 export interface SimConfig {
   material: Material;
@@ -150,4 +185,4 @@ export interface SimConfig {
 }
 
 /** Union of all mode-specific configs. */
-export type ModeConfig = FickConfig | CahnHilliardConfig | GGConfig;
+export type ModeConfig = FickConfig | CahnHilliardConfig | GGConfig | SolidificationConfig;
