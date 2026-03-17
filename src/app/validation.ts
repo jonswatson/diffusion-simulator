@@ -3,7 +3,7 @@
 //
 // Mass conservation: sum concentration at load, compare periodically.
 // Analytical validation: midline erfc comparison for 1D step IC.
-// Grain growth: bulk free energy and grain count diagnostics.
+// Grain growth: simplex residual, min/max phi, full free energy, grain count.
 // Mode-aware: analytical check only for Fick mode.
 // ============================================================
 
@@ -16,8 +16,11 @@ export interface ValidationState {
   lastAnalyticalRMS: number;   // RMS error vs erfc solution on midline
   lastCheckStep: number;
   // Grain growth diagnostics
-  lastFreeEnergy: number;      // bulk + interaction free energy (no gradient term)
+  lastFreeEnergy: number;      // full free energy (gradient + bulk + interaction)
   lastGrainCount: number;      // grains with at least one dominant pixel
+  lastSimplexResidual: number; // max |Σᵢ φᵢ(x,y) − 1| over all pixels
+  lastMinPhi: number;          // global min of any φᵢ (should be ≥ 0)
+  lastMaxPhi: number;          // global max of any φᵢ (should be ≤ 1)
 }
 
 /** Compute the total "mass" (sum of all concentration values) from a field. */
@@ -54,36 +57,89 @@ export function midlineRMSError(
 }
 
 /**
- * Bulk + interaction free energy for the Allen-Cahn multi-grain model.
- * F_bulk = Σ_pix Σ_i  W/4·ηᵢ²·(1−ηᵢ)²
- * F_inter = Σ_pix Σ_{i<j} A·ηᵢ²·ηⱼ²
- * Gradient term omitted (needs finite differences; expensive on CPU).
- * This quantity still decreases monotonically after the initial transient.
+ * Simplex constraint residual for the Allen-Cahn grain growth field.
+ * Returns max|Σᵢ φᵢ(x,y) − 1|, min(φᵢ), max(φᵢ) over all pixels.
+ *
+ * The constrained solver should keep these values near 0, ≥0, ≤1 respectively.
  */
-export function grainBulkFreeEnergy(
+export function computeSimplexResidual(
   field: Float32Array,
   numGrains: number,
   gridSize: number,
+): { maxAbsErr: number; minPhi: number; maxPhi: number } {
+  const planeSize = gridSize * gridSize;
+  let maxAbsErr = 0;
+  let minPhi = Infinity;
+  let maxPhi = -Infinity;
+
+  for (let pix = 0; pix < planeSize; pix++) {
+    let sumPhi = 0;
+    for (let g = 0; g < numGrains; g++) {
+      const phi = field[g * planeSize + pix];
+      sumPhi += phi;
+      if (phi < minPhi) minPhi = phi;
+      if (phi > maxPhi) maxPhi = phi;
+    }
+    const err = Math.abs(sumPhi - 1.0);
+    if (err > maxAbsErr) maxAbsErr = err;
+  }
+
+  return { maxAbsErr, minPhi, maxPhi };
+}
+
+/**
+ * Full free energy for the constrained Allen-Cahn grain growth model.
+ *
+ * F = Σ_pix [ Σᵢ κ/2·|∇φᵢ|² + Σᵢ W/4·φᵢ²(1−φᵢ)² + Σᵢ<ⱼ A·φᵢ²φⱼ² ]
+ *
+ * Gradient term uses central differences (periodic wrap at boundaries).
+ * A non-increasing F is required for thermodynamically consistent evolution.
+ */
+export function computeFullGGFreeEnergy(
+  field: Float32Array,
+  numGrains: number,
+  gridSize: number,
+  kappa: number,
   W: number,
   A: number,
 ): number {
-  const planeSize = gridSize * gridSize;
+  const N = gridSize;
+  const planeSize = N * N;
   let F = 0;
-  for (let pix = 0; pix < planeSize; pix++) {
-    for (let i = 0; i < numGrains; i++) {
-      const ei = field[i * planeSize + pix];
-      F += (W / 4) * ei * ei * (1 - ei) * (1 - ei);
-      for (let j = i + 1; j < numGrains; j++) {
-        const ej = field[j * planeSize + pix];
-        F += A * ei * ei * ej * ej;
+
+  for (let y = 0; y < N; y++) {
+    const yp = (y + 1) % N;
+    const ym = (y + N - 1) % N;
+    for (let x = 0; x < N; x++) {
+      const xp = (x + 1) % N;
+      const xm = (x + N - 1) % N;
+
+      for (let i = 0; i < numGrains; i++) {
+        const base = i * planeSize;
+        const c = field[base + y * N + x];
+
+        // Gradient energy: κ/2 · (|∂φ/∂x|² + |∂φ/∂y|²) — central difference
+        const dpdx = (field[base + y * N + xp] - field[base + y * N + xm]) * 0.5;
+        const dpdy = (field[base + yp * N + x] - field[base + ym * N + x]) * 0.5;
+        F += (kappa / 2) * (dpdx * dpdx + dpdy * dpdy);
+
+        // Double-well bulk: W/4·φᵢ²(1−φᵢ)²
+        F += (W / 4) * c * c * (1 - c) * (1 - c);
+
+        // Grain-grain interaction: A·φᵢ²·φⱼ² (summed for j > i only)
+        for (let j = i + 1; j < numGrains; j++) {
+          const cj = field[j * planeSize + y * N + x];
+          F += A * c * c * cj * cj;
+        }
       }
     }
   }
+
   return F;
 }
 
 /**
- * Count grains that are dominant (maxEta > 0.5) in at least one pixel.
+ * Count grains that are dominant (argmax φᵢ > 0.5) in at least one pixel.
  * A grain drops from this count once it has been fully consumed.
  */
 export function countActiveGrains(
@@ -94,13 +150,13 @@ export function countActiveGrains(
   const planeSize = gridSize * gridSize;
   const present = new Set<number>();
   for (let pix = 0; pix < planeSize; pix++) {
-    let maxEta = 0;
+    let maxPhi = 0;
     let best = 0;
     for (let g = 0; g < numGrains; g++) {
       const e = field[g * planeSize + pix];
-      if (e > maxEta) { maxEta = e; best = g; }
+      if (e > maxPhi) { maxPhi = e; best = g; }
     }
-    if (maxEta > 0.5) present.add(best);
+    if (maxPhi > 0.5) present.add(best);
   }
   return present.size;
 }
@@ -114,11 +170,15 @@ export function createValidation(): ValidationState {
     lastCheckStep: 0,
     lastFreeEnergy: 0,
     lastGrainCount: 0,
+    lastSimplexResidual: 0,
+    lastMinPhi: 0,
+    lastMaxPhi: 1,
   };
 }
 
 export interface GGValidationParams {
   numGrains: number;
+  kappa: number;
   W: number;
   A: number;
 }
@@ -148,8 +208,14 @@ export async function runValidationChecks(
   const field = await solver.readField();
 
   if (mode === 'grain-growth' && ggParams) {
-    validation.lastFreeEnergy = grainBulkFreeEnergy(
-      field, ggParams.numGrains, gridWidth, ggParams.W, ggParams.A,
+    const { maxAbsErr, minPhi, maxPhi } = computeSimplexResidual(
+      field, ggParams.numGrains, gridWidth,
+    );
+    validation.lastSimplexResidual = maxAbsErr;
+    validation.lastMinPhi = minPhi;
+    validation.lastMaxPhi = maxPhi;
+    validation.lastFreeEnergy = computeFullGGFreeEnergy(
+      field, ggParams.numGrains, gridWidth, ggParams.kappa, ggParams.W, ggParams.A,
     );
     validation.lastGrainCount = countActiveGrains(field, ggParams.numGrains, gridWidth);
   } else {

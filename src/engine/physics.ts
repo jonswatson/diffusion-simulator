@@ -128,7 +128,7 @@ export function epsilonSqFromInterfaceWidth(xi: number, A_eff: number): number {
  */
 export function computeGGDt(
   kappa: number, W: number, A: number, numGrains: number,
-  L: number, safetyFactor = 0.2,
+  L: number, safetyFactor = 0.1,
 ): number {
   const stiffness = 4.0 * kappa + W / 2.0 + 2.0 * A * (numGrains - 1);
   return safetyFactor / (L * stiffness);

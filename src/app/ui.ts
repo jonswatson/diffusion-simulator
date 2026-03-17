@@ -21,6 +21,7 @@ import { generateDefaultField, imageFileToField } from './imageLoader';
 import { generateSpinodalField, generateVoronoiField } from './initialConditions';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
 import type { GGValidationParams } from './validation';
+import { runGGValidationSuite } from '../engine/ggPhysicsTests';
 
 export interface UIContext {
   solver: DiffusionEngine;
@@ -81,6 +82,7 @@ export function initUI(ctx: UIContext): FrameCallback {
 
   // Grain Growth-specific
   const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
+  const btnGGValidate = $<HTMLButtonElement>('btn-gg-validate');
 
   // Domain / grid
   const selDomain = $<HTMLSelectElement>('sel-domain');
@@ -101,6 +103,10 @@ export function initUI(ctx: UIContext): FrameCallback {
   const lblMassError = $('lbl-mass-error');
   const infoMassError = $('info-mass-error');
   const infoRmsError = $('info-rms-error');
+  const infoSimplexResidual = $('info-simplex-residual');
+  const infoMinMaxPhi = $('info-min-max-phi');
+  const rowSimplexResidual = $('row-simplex-residual');
+  const rowMinMaxPhi = $('row-min-max-phi');
   const warningsDiv = $('warnings');
 
   // Validation state
@@ -297,13 +303,16 @@ export function initUI(ctx: UIContext): FrameCallback {
       .join('');
   }
 
-  /** Show/hide mode-specific control sections. */
+  /** Show/hide mode-specific control sections and diagnostic rows. */
   function updateModeVisibility(): void {
     fickControls.hidden = currentMode !== 'fick';
     chControls.hidden = currentMode !== 'cahn-hilliard';
     ggControls.hidden = currentMode !== 'grain-growth';
     // Image upload is only useful for Fick
     lblImageUpload.hidden = currentMode !== 'fick';
+    // Simplex diagnostics only meaningful for GG
+    rowSimplexResidual.hidden = currentMode !== 'grain-growth';
+    rowMinMaxPhi.hidden = currentMode !== 'grain-growth';
   }
 
   /** Mode display name for the info panel. */
@@ -381,6 +390,31 @@ export function initUI(ctx: UIContext): FrameCallback {
   slCHMean.addEventListener('input', () => {
     valCHMean.textContent = parseFloat(slCHMean.value).toFixed(2);
     // Mean phi only affects the IC, not the running sim config
+  });
+
+  // ---- GG validation suite ----
+  btnGGValidate.addEventListener('click', async () => {
+    const wasPlaying = ctx.loop.playing;
+    if (wasPlaying) ctx.loop.pause();
+    btnGGValidate.disabled = true;
+    btnGGValidate.textContent = 'Running…';
+    warningsDiv.innerHTML = '<div class="warning">Running physics validation suite (may take ~30 s)…</div>';
+
+    try {
+      const results = await runGGValidationSuite(ctx.device, ctx.canvasFormat);
+      const html = results.map(r => {
+        const icon = r.passed ? '✓' : '✗';
+        const cls = r.passed ? 'info' : 'warning';
+        return `<div class="${cls}">${icon} <strong>${r.name}</strong>: ${r.reason}</div>`;
+      }).join('');
+      warningsDiv.innerHTML = html;
+    } catch (e) {
+      warningsDiv.innerHTML = `<div class="warning">Validation error: ${String(e)}</div>`;
+    } finally {
+      btnGGValidate.disabled = false;
+      btnGGValidate.textContent = 'Run validation suite';
+      if (wasPlaying) ctx.loop.play();
+    }
   });
 
   // ---- GG controls ----
@@ -486,9 +520,16 @@ export function initUI(ctx: UIContext): FrameCallback {
       infoMassError.textContent = validation.lastGrainCount > 0
         ? String(validation.lastGrainCount)
         : '\u2014';
-      // Repurpose RMS slot for bulk free energy
+      // Repurpose RMS slot for full free energy
       infoRmsError.textContent = validation.lastFreeEnergy > 0
         ? sci(validation.lastFreeEnergy, 3)
+        : '\u2014';
+      // GG-specific rows
+      infoSimplexResidual.textContent = validation.lastCheckStep > 0
+        ? sci(validation.lastSimplexResidual, 2)
+        : '\u2014';
+      infoMinMaxPhi.textContent = validation.lastCheckStep > 0
+        ? `${validation.lastMinPhi.toFixed(4)} / ${validation.lastMaxPhi.toFixed(4)}`
         : '\u2014';
     } else {
       lblMassError.textContent = 'Mass drift';
@@ -503,7 +544,7 @@ export function initUI(ctx: UIContext): FrameCallback {
     // Run async validation checks (throttled internally)
     if (state.stepsRun > 0) {
       const ggParams: GGValidationParams | undefined = currentMode === 'grain-growth'
-        ? { numGrains: parseInt(selGGGrains.value, 10), W: GG_W, A: GG_A }
+        ? { numGrains: parseInt(selGGGrains.value, 10), kappa: GG_KAPPA, W: GG_W, A: GG_A }
         : undefined;
       runValidationChecks(validation, ctx.solver, currentGridWidth, currentMode, ggParams);
     }

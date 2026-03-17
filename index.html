@@ -83,8 +83,8 @@
         <div id="gg-controls" hidden>
           <h3>Grain Growth Parameters</h3>
           <p style="font-size:0.85em;color:#aaa;margin:0 0 0.5em">
-            Nondimensional Allen-Cahn model (&kappa; = W = A = L = 1).
-            Expect an initial transient while sharp Voronoi interfaces diffuse.
+            Constrained Allen-Cahn model (&kappa; = W = A = L = 1, nondimensional).
+            &Sigma;&phi;<sub>i</sub> = 1 enforced at every pixel via simplex projection.
           </p>
           <label>
             Grains
@@ -95,6 +95,7 @@
               <option value="16">16</option>
             </select>
           </label>
+          <button id="btn-gg-validate" style="margin-top:0.5em;width:100%">Run validation suite</button>
         </div>
 
         <h3>Domain</h3>
@@ -149,6 +150,8 @@
         <table>
           <tr><td id="lbl-mass-error">Mass drift</td><td id="info-mass-error">—</td></tr>
           <tr><td>RMS vs erfc</td><td id="info-rms-error">—</td></tr>
+          <tr id="row-simplex-residual" hidden><td>&Sigma;&phi;<sub>i</sub>−1 max</td><td id="info-simplex-residual">—</td></tr>
+          <tr id="row-min-max-phi" hidden><td>min/max &phi;</td><td id="info-min-max-phi">—</td></tr>
         </table>
         <div id="warnings"></div>
       </div>

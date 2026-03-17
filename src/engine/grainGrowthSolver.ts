@@ -1,22 +1,27 @@
 // ============================================================
-// Grain growth solver — Allen-Cahn multi-order-parameter phase field.
+// Constrained Allen-Cahn grain growth solver.
 //
-// Two-pass explicit Euler on GPU:
-//   Pass 1 (sum_sq):  sumSq[y,x] = Σᵢ ηᵢ²   (auxiliary scalar)
-//   Pass 2 (update):  ηᵢ_new = ηᵢ + dt·L·(κ∇²ηᵢ − dF_bulk − dF_interact)
+// Single-pass explicit Euler per pixel:
+//   1. Compute μᵢ = δF/δφᵢ for every grain at every pixel.
+//   2. Compute λ = mean(μ) per pixel (Lagrange multiplier).
+//   3. φ̃ᵢ = φᵢ − dt·L·(μᵢ − λ)   (constrained update, Σφ conserved)
+//   4. Project φ̃ onto probability simplex (Duchi et al.).
 //
-// Ping-pong: etaA ↔ etaB with bind group swap each step.
+// Constraint guarantees:
+//   - Σᵢ φᵢ(x,y) = 1 exactly after projection
+//   - φᵢ ≥ 0 everywhere after projection
+//   → No void phase, no dark band at grain boundaries.
+//
+// Ping-pong: phiA ↔ phiB with bind group swap each step.
 // Periodic boundary conditions (index wrapping in WGSL).
-//
-// Buffer layout: eta[g * W² + y * W + x]  (grain-major order, f32).
+// Buffer layout: phi[g * W² + y * W + x]  (grain-major order, f32).
 // ============================================================
 
 import { createUniformBuffer, dispatchSize, BYTES_PER_CELL } from './buffers';
 import { computeGGDt } from './physics';
 import type { DiffusionEngine, SimMode, EngineState } from './types';
 import type { GGConfig } from './materials';
-import sumSqWGSL from './shaders/grainGrowthSumSq.wgsl?raw';
-import updateWGSL from './shaders/grainGrowthUpdate.wgsl?raw';
+import constrainedWGSL from './shaders/grainGrowthConstrained.wgsl?raw';
 import renderWGSL from './shaders/renderGrain.wgsl?raw';
 
 export interface GGSolverConfig {
@@ -28,7 +33,7 @@ export interface GGSolverConfig {
   numGrains: number;
 }
 
-/** Uniform struct layout: numGrains(u32) gridWidth(u32) dt kappa Wbar A L _pad = 32 bytes */
+/** Compute uniform struct layout: numGrains(u32) gridWidth(u32) dt kappa W A L _pad = 32 bytes */
 const UNIFORM_SIZE = 32;
 
 /** Render uniform struct: numGrains(u32) gridWidth(u32) _pad0 _pad1 = 16 bytes */
@@ -64,38 +69,32 @@ export class GrainGrowthSolver implements DiffusionEngine {
   private numGrains: number;
 
   // Ping-pong order-parameter buffers: [numGrains × W × H] f32
-  private etaA: GPUBuffer;
-  private etaB: GPUBuffer;
-
-  // Auxiliary: sum of squares Σᵢ ηᵢ² per pixel — [W × H] f32
-  private sumSqBuf: GPUBuffer;
+  private phiA: GPUBuffer;
+  private phiB: GPUBuffer;
 
   private uniformBuffer: GPUBuffer;
   private renderUniformBuffer: GPUBuffer;
   private colorTableBuffer: GPUBuffer;
 
-  // Compute pipelines
-  private sumSqPipeline: GPUComputePipeline;
-  private updatePipeline: GPUComputePipeline;
+  // Single compute pipeline (constrained Allen-Cahn, single pass)
+  private computePipeline: GPUComputePipeline;
 
-  // Bind groups: two directions × two passes
-  private sumSqBG_A: GPUBindGroup;   // Pass 1 reads etaA
-  private sumSqBG_B: GPUBindGroup;   // Pass 1 reads etaB
-  private updateBG_AtoB: GPUBindGroup;  // Pass 2 reads etaA + sumSq → writes etaB
-  private updateBG_BtoA: GPUBindGroup;  // Pass 2 reads etaB + sumSq → writes etaA
+  // Two bind groups — one per ping-pong direction
+  private bindGroupAtoB: GPUBindGroup;  // reads phiA → writes phiB
+  private bindGroupBtoA: GPUBindGroup;  // reads phiB → writes phiA
 
   // Render pipeline
   private renderPipeline: GPURenderPipeline;
-  private renderBG_A: GPUBindGroup;  // renders etaA
-  private renderBG_B: GPUBindGroup;  // renders etaB
+  private renderBG_A: GPUBindGroup;  // renders phiA
+  private renderBG_B: GPUBindGroup;  // renders phiB
 
-  private parity = 0;  // 0 = etaA is current, 1 = etaB is current
+  private parity = 0;  // 0 = phiA is current, 1 = phiB is current
 
   private _state: EngineState = {
     time: 0,
     diffusivity: 0,  // not meaningful for GG
     dx: 1,           // nondimensional
-    dt: 0.01,
+    dt: 0.005,
     r: 0,            // not meaningful for GG
     stepsRun: 0,
   };
@@ -104,7 +103,7 @@ export class GrainGrowthSolver implements DiffusionEngine {
   get stepsRun(): number { return this._state.stepsRun; }
 
   get currentBuffer(): GPUBuffer {
-    return this.parity === 0 ? this.etaA : this.etaB;
+    return this.parity === 0 ? this.phiA : this.phiB;
   }
 
   constructor(cfg: GGSolverConfig) {
@@ -115,24 +114,18 @@ export class GrainGrowthSolver implements DiffusionEngine {
     this.height = height;
     this.numGrains = numGrains;
 
-    const etaBytes = numGrains * width * height * BYTES_PER_CELL;
-    const pixelBytes = width * height * BYTES_PER_CELL;
+    const phiBytes = numGrains * width * height * BYTES_PER_CELL;
 
     // --- Buffers ---
-    this.etaA = device.createBuffer({
-      label: 'eta-A',
-      size: etaBytes,
+    this.phiA = device.createBuffer({
+      label: 'phi-A',
+      size: phiBytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
-    this.etaB = device.createBuffer({
-      label: 'eta-B',
-      size: etaBytes,
+    this.phiB = device.createBuffer({
+      label: 'phi-B',
+      size: phiBytes,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-    });
-    this.sumSqBuf = device.createBuffer({
-      label: 'sumSq',
-      size: pixelBytes,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
     this.uniformBuffer = createUniformBuffer(device, UNIFORM_SIZE);
     this.renderUniformBuffer = createUniformBuffer(device, RENDER_UNIFORM_SIZE);
@@ -142,82 +135,44 @@ export class GrainGrowthSolver implements DiffusionEngine {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    // Initialize color table
+    // Initialize color table and render uniforms
     device.queue.writeBuffer(this.colorTableBuffer, 0, makeColorTable(numGrains) as Float32Array<ArrayBuffer>);
-
-    // Initialize render uniforms (numGrains, gridWidth, 0, 0)
     const ru = new ArrayBuffer(RENDER_UNIFORM_SIZE);
     const ru32 = new Uint32Array(ru);
     ru32[0] = numGrains;
     ru32[1] = width;
     device.queue.writeBuffer(this.renderUniformBuffer, 0, ru);
 
-    // --- Sum-sq pipeline ---
-    const sumSqModule = device.createShaderModule({ code: sumSqWGSL, label: 'gg-sumSq' });
-    const sumSqBGL = device.createBindGroupLayout({
-      label: 'gg-sumSq-bgl',
+    // --- Compute pipeline ---
+    const computeModule = device.createShaderModule({ code: constrainedWGSL, label: 'gg-constrained' });
+    const computeBGL = device.createBindGroupLayout({
+      label: 'gg-compute-bgl',
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
-    this.sumSqPipeline = device.createComputePipeline({
-      label: 'gg-sumSq-pipeline',
-      layout: device.createPipelineLayout({ bindGroupLayouts: [sumSqBGL] }),
-      compute: { module: sumSqModule, entryPoint: 'main' },
+    this.computePipeline = device.createComputePipeline({
+      label: 'gg-constrained-pipeline',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [computeBGL] }),
+      compute: { module: computeModule, entryPoint: 'main' },
     });
 
-    // --- Update pipeline ---
-    const updateModule = device.createShaderModule({ code: updateWGSL, label: 'gg-update' });
-    const updateBGL = device.createBindGroupLayout({
-      label: 'gg-update-bgl',
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-      ],
-    });
-    this.updatePipeline = device.createComputePipeline({
-      label: 'gg-update-pipeline',
-      layout: device.createPipelineLayout({ bindGroupLayouts: [updateBGL] }),
-      compute: { module: updateModule, entryPoint: 'main' },
-    });
-
-    // --- Bind groups ---
-    this.sumSqBG_A = device.createBindGroup({
-      layout: sumSqBGL,
+    this.bindGroupAtoB = device.createBindGroup({
+      layout: computeBGL,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaA } },
-        { binding: 2, resource: { buffer: this.sumSqBuf } },
+        { binding: 1, resource: { buffer: this.phiA } },
+        { binding: 2, resource: { buffer: this.phiB } },
       ],
     });
-    this.sumSqBG_B = device.createBindGroup({
-      layout: sumSqBGL,
+    this.bindGroupBtoA = device.createBindGroup({
+      layout: computeBGL,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaB } },
-        { binding: 2, resource: { buffer: this.sumSqBuf } },
-      ],
-    });
-    this.updateBG_AtoB = device.createBindGroup({
-      layout: updateBGL,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaA } },
-        { binding: 2, resource: { buffer: this.sumSqBuf } },
-        { binding: 3, resource: { buffer: this.etaB } },
-      ],
-    });
-    this.updateBG_BtoA = device.createBindGroup({
-      layout: updateBGL,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: { buffer: this.etaB } },
-        { binding: 2, resource: { buffer: this.sumSqBuf } },
-        { binding: 3, resource: { buffer: this.etaA } },
+        { binding: 1, resource: { buffer: this.phiB } },
+        { binding: 2, resource: { buffer: this.phiA } },
       ],
     });
 
@@ -237,12 +192,11 @@ export class GrainGrowthSolver implements DiffusionEngine {
       vertex: { module: renderModule, entryPoint: 'vs_main' },
       fragment: { module: renderModule, entryPoint: 'fs_main', targets: [{ format: canvasFormat }] },
     });
-
-    this.renderBG_A = this.makeRenderBindGroup(this.etaA);
-    this.renderBG_B = this.makeRenderBindGroup(this.etaB);
+    this.renderBG_A = this.makeRenderBindGroup(this.phiA);
+    this.renderBG_B = this.makeRenderBindGroup(this.phiB);
   }
 
-  /** Apply physics parameters. Recomputes dt and updates the GPU uniform buffer. */
+  /** Apply physics parameters. Recomputes dt and writes the GPU uniform buffer. */
   updateGGConfig(config: GGConfig): void {
     const dt = computeGGDt(config.kappa, config.W, config.A, config.numGrains, config.L);
     this._state.dt = dt;
@@ -262,9 +216,8 @@ export class GrainGrowthSolver implements DiffusionEngine {
   }
 
   loadField(data: Float32Array<ArrayBuffer>): void {
-    this.device.queue.writeBuffer(this.etaA, 0, data);
-    // Zero out etaB (not strictly required but keeps state clean)
-    this.device.queue.writeBuffer(this.etaB, 0, new Float32Array(data.length) as Float32Array<ArrayBuffer>);
+    this.device.queue.writeBuffer(this.phiA, 0, data);
+    this.device.queue.writeBuffer(this.phiB, 0, new Float32Array(data.length) as Float32Array<ArrayBuffer>);
     this.parity = 0;
     this._state.stepsRun = 0;
     this._state.time = 0;
@@ -273,26 +226,18 @@ export class GrainGrowthSolver implements DiffusionEngine {
   step(n: number): void {
     const encoder = this.device.createCommandEncoder({ label: 'gg-step' });
     const [wx, wy] = dispatchSize(this.width, this.height);
-    const wz = this.numGrains; // one workgroup per grain (z dimension)
 
+    // Each step is its own compute pass. Separate beginComputePass/endComputePass
+    // calls provide the implicit memory barrier: step i+1 is guaranteed to see
+    // the phiOut values written by step i before it reads them as phiIn.
+    // (Within a single pass, dispatches are not ordered — never combine steps.)
     for (let i = 0; i < n; i++) {
-      const sumSqBG = this.parity === 0 ? this.sumSqBG_A : this.sumSqBG_B;
-      const updateBG = this.parity === 0 ? this.updateBG_AtoB : this.updateBG_BtoA;
-
-      // Pass 1: compute sumSq from current eta (separate pass = implicit barrier)
-      const pass1 = encoder.beginComputePass({ label: 'gg-sumSq' });
-      pass1.setPipeline(this.sumSqPipeline);
-      pass1.setBindGroup(0, sumSqBG);
-      pass1.dispatchWorkgroups(wx, wy);
-      pass1.end();
-
-      // Pass 2: update all grains (3D dispatch; z = grain index)
-      const pass2 = encoder.beginComputePass({ label: 'gg-update' });
-      pass2.setPipeline(this.updatePipeline);
-      pass2.setBindGroup(0, updateBG);
-      pass2.dispatchWorkgroups(wx, wy, wz);
-      pass2.end();
-
+      const bg = this.parity === 0 ? this.bindGroupAtoB : this.bindGroupBtoA;
+      const pass = encoder.beginComputePass({ label: 'gg-constrained' });
+      pass.setPipeline(this.computePipeline);
+      pass.setBindGroup(0, bg);
+      pass.dispatchWorkgroups(wx, wy);
+      pass.end();
       this.parity = 1 - this.parity;
     }
 
@@ -320,12 +265,10 @@ export class GrainGrowthSolver implements DiffusionEngine {
     this.device.queue.submit([encoder.finish()]);
   }
 
-  /** Not meaningful for GG (no scalar concentration). No-op. */
-  updateMaterialColors(_colorA: [number, number, number], _colorB: [number, number, number]): void {
-    // GG uses per-grain color table; no-op for interface compatibility.
-  }
+  /** Not meaningful for GG (no scalar concentration). No-op for interface compatibility. */
+  updateMaterialColors(_colorA: [number, number, number], _colorB: [number, number, number]): void {}
 
-  /** Read the full eta field [numGrains × W × H] f32 from GPU. Slow — diagnostics only. */
+  /** Read the full phi field [numGrains × W × H] f32 from GPU. Slow — diagnostics only. */
   async readField(): Promise<Float32Array> {
     const size = this.numGrains * this.width * this.height * BYTES_PER_CELL;
     const staging = this.device.createBuffer({
@@ -346,23 +289,21 @@ export class GrainGrowthSolver implements DiffusionEngine {
   }
 
   destroy(): void {
-    this.etaA.destroy();
-    this.etaB.destroy();
-    this.sumSqBuf.destroy();
+    this.phiA.destroy();
+    this.phiB.destroy();
     this.uniformBuffer.destroy();
     this.renderUniformBuffer.destroy();
     this.colorTableBuffer.destroy();
   }
 
-  private makeRenderBindGroup(etaBuf: GPUBuffer): GPUBindGroup {
+  private makeRenderBindGroup(phiBuf: GPUBuffer): GPUBindGroup {
     return this.device.createBindGroup({
       layout: this.renderPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.renderUniformBuffer } },
-        { binding: 1, resource: { buffer: etaBuf } },
+        { binding: 1, resource: { buffer: phiBuf } },
         { binding: 2, resource: { buffer: this.colorTableBuffer } },
       ],
     });
   }
 }
-
