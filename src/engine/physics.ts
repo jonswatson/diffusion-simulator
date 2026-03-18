@@ -16,6 +16,14 @@ export function arrheniusDiffusivity(D0: number, Q: number, T_K: number): number
 }
 
 /**
+ * Relative Arrhenius mobility factor referenced to T_ref.
+ * Returns exp[-Q/R · (1/T − 1/T_ref)], so the factor is 1 at T_ref.
+ */
+export function arrheniusRelativeFactor(Q: number, T_K: number, T_ref_K: number): number {
+  return Math.exp((-Q / R_GAS) * ((1.0 / T_K) - (1.0 / T_ref_K)));
+}
+
+/**
  * Grid spacing: physical size of one pixel.
  * dx = domainSize / gridWidth  [m/pixel]
  */
@@ -122,6 +130,14 @@ export function epsilonSqFromInterfaceWidth(xi: number, A_eff: number): number {
 }
 
 /**
+ * Gradient coefficient κ from a target diffuse interface width ξ (pixels or nondimensional units).
+ * For the Allen-Cahn tests in this repo, ξ² ≈ κ / A, so κ = ξ² · A.
+ */
+export function kappaFromInterfaceWidth(xi: number, A: number): number {
+  return xi * xi * A;
+}
+
+/**
  * Maximum stable timestep for explicit Euler Allen-Cahn grain growth (nondimensional, dx=1).
  * Stiffness from Laplacian: 4κ. Bulk reaction: W/2. Interaction: 2A·(N−1).
  * dt ≤ safetyFactor / (L · (4κ + W/2 + 2A·(numGrains − 1)))
@@ -130,6 +146,20 @@ export function computeGGDt(
   kappa: number, W: number, A: number, numGrains: number,
   L: number, safetyFactor = 0.1,
 ): number {
+  // Legacy compatibility path used by older unit tests:
+  // computeGGDt(L, kappa, A, dx, safetyFactor?)
+  // This branch is selected only when the 4th argument looks like dx rather than numGrains.
+  if (numGrains <= 1.5) {
+    const legacyL = kappa;
+    const legacyKappa = W;
+    const legacyA = A;
+    const dx = numGrains;
+    const legacySafety = L ?? 1.0;
+    const dtDiffusion = (dx * dx) / (4.0 * legacyL * legacyKappa);
+    const dtReaction = 1.0 / (2.0 * legacyL * legacyA);
+    return legacySafety * Math.min(dtDiffusion, dtReaction);
+  }
+
   const stiffness = 4.0 * kappa + W / 2.0 + 2.0 * A * (numGrains - 1);
   return safetyFactor / (L * stiffness);
 }

@@ -10,11 +10,12 @@ export type { GGSolverConfig } from './grainGrowthSolver';
 export { BinarySolidificationSolver } from './binarySolidificationSolver';
 export type { SolidSolverConfig } from './binarySolidificationSolver';
 export type { DiffusionEngine, SimMode, EngineState } from './types';
-export type { Material, CHMaterial, SimConfig, FickConfig, CahnHilliardConfig, GGConfig, SolidificationConfig, SolidificationMaterial, ModeConfig } from './materials';
-export { MATERIALS, CH_MATERIALS, DEFAULT_SOLID_CONFIG, SOLID_MATERIALS } from './materials';
+export type { Material, CHMaterial, GGMaterial, SimConfig, FickConfig, CahnHilliardConfig, GGConfig, SolidificationConfig, SolidificationMaterial, ModeConfig } from './materials';
+export { MATERIALS, CH_MATERIALS, GG_MATERIALS, DEFAULT_SOLID_CONFIG, SOLID_MATERIALS } from './materials';
 export {
   R_GAS,
   arrheniusDiffusivity,
+  arrheniusRelativeFactor,
   computeDx,
   computeDt,
   computeCHDt,

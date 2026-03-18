@@ -39,16 +39,24 @@ export function createLoop(
     const deltaMs = timestamp - lastTimestamp;
     lastTimestamp = timestamp;
     const fps = recordFrameTime(deltaMs);
+    let rendered = false;
 
     if (playing) {
       const wallDeltaS = Math.min(deltaMs / 1000, 0.1);
       const n = Math.round(stepsPerSecond * wallDeltaS);
       if (n > 0) {
-        engine.step(n);
+        if (engine.stepAndRender) {
+          engine.stepAndRender(n);
+          rendered = true;
+        } else {
+          engine.step(n);
+        }
       }
     }
 
-    engine.render();
+    if (!rendered) {
+      engine.render();
+    }
     onFrame({ time: engine.state.time, stepsRun: engine.state.stepsRun, fps });
     requestAnimationFrame(tick);
   }

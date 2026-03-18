@@ -39,7 +39,7 @@ export function generateSolidSeed(
   seedRadius = gridWidth / 6,
   c0 = 0.6,
   cs_eq = 0.3,
-  cl_eq = 0.7,
+  _cl_eq = 0.7,
   xi = 3.0,
 ): Float32Array {
   const N = gridWidth * gridWidth;

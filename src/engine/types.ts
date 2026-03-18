@@ -31,6 +31,9 @@ export interface DiffusionEngine {
   /** Advance the simulation by n timesteps. */
   step(n: number): void;
 
+  /** Advance and render in one GPU submission when the solver can do so efficiently. */
+  stepAndRender?(n: number): void;
+
   /** Render the current field to the canvas. */
   render(): void;
 

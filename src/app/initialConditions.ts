@@ -70,6 +70,74 @@ export function generateVoronoiField(gridSize: number, numGrains: number): Float
 }
 
 /**
+ * Smooth Voronoi tessellation for grain growth tests.
+ * Uses a softmax over squared distance-to-seed so Σηᵢ = 1 and interfaces are diffuse.
+ */
+export function generateSmoothVoronoiField(
+  gridSize: number,
+  numGrains: number,
+  xi_px = 6,
+): Float32Array {
+  const N = gridSize;
+  const planeSize = N * N;
+  const field = new Float32Array(numGrains * planeSize);
+
+  const seedX = new Float32Array(numGrains);
+  const seedY = new Float32Array(numGrains);
+  for (let g = 0; g < numGrains; g++) {
+    seedX[g] = Math.random() * N;
+    seedY[g] = Math.random() * N;
+  }
+
+  const sigma2 = Math.max(1.0, xi_px * xi_px);
+  const weights = new Float32Array(numGrains);
+
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let sumW = 0;
+      for (let g = 0; g < numGrains; g++) {
+        let dx = Math.abs(x - seedX[g]);
+        let dy = Math.abs(y - seedY[g]);
+        if (dx > N / 2) dx = N - dx;
+        if (dy > N / 2) dy = N - dy;
+        const d2 = dx * dx + dy * dy;
+        const w = Math.exp(-d2 / (2.0 * sigma2));
+        weights[g] = w;
+        sumW += w;
+      }
+
+      const pix = y * N + x;
+      for (let g = 0; g < numGrains; g++) {
+        field[g * planeSize + pix] = weights[g] / sumW;
+      }
+    }
+  }
+
+  return field;
+}
+
+/** Evenly spaced grain colors packed as RGBA for tests and GPU upload helpers. */
+export function generateGrainColors(numGrains: number): Float32Array {
+  const colors = new Float32Array(numGrains * 4);
+  for (let i = 0; i < numGrains; i++) {
+    const h = (i / numGrains) * 360;
+    const s = 0.75;
+    const l = 0.55;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number): number => {
+      const k = (n + h / 30) % 12;
+      return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    };
+
+    colors[i * 4] = f(0);
+    colors[i * 4 + 1] = f(8);
+    colors[i * 4 + 2] = f(4);
+    colors[i * 4 + 3] = 1.0;
+  }
+  return colors;
+}
+
+/**
  * Planar interface IC for 2-grain physics test.
  * Grain 0: tanh profile rising left-to-right across the grid midpoint.
  * Grain 1: complement (φ₁ = 1 − φ₀).

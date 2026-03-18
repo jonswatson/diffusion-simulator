@@ -75,6 +75,7 @@ export class GrainGrowthSolver implements DiffusionEngine {
   private uniformBuffer: GPUBuffer;
   private renderUniformBuffer: GPUBuffer;
   private colorTableBuffer: GPUBuffer;
+  private readbackBuffer: GPUBuffer;
 
   // Single compute pipeline (constrained Allen-Cahn, single pass)
   private computePipeline: GPUComputePipeline;
@@ -134,6 +135,11 @@ export class GrainGrowthSolver implements DiffusionEngine {
       size: numGrains * 3 * BYTES_PER_CELL,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
+    this.readbackBuffer = device.createBuffer({
+      label: 'gg-readback',
+      size: phiBytes,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
 
     // Initialize color table and render uniforms
     device.queue.writeBuffer(this.colorTableBuffer, 0, makeColorTable(numGrains) as Float32Array<ArrayBuffer>);
@@ -156,7 +162,11 @@ export class GrainGrowthSolver implements DiffusionEngine {
     this.computePipeline = device.createComputePipeline({
       label: 'gg-constrained-pipeline',
       layout: device.createPipelineLayout({ bindGroupLayouts: [computeBGL] }),
-      compute: { module: computeModule, entryPoint: 'main' },
+      compute: {
+        module: computeModule,
+        entryPoint: 'main',
+        constants: { NUM_GRAINS: numGrains },
+      },
     });
 
     this.bindGroupAtoB = device.createBindGroup({
@@ -190,7 +200,12 @@ export class GrainGrowthSolver implements DiffusionEngine {
       label: 'gg-render-pipeline',
       layout: device.createPipelineLayout({ bindGroupLayouts: [renderBGL] }),
       vertex: { module: renderModule, entryPoint: 'vs_main' },
-      fragment: { module: renderModule, entryPoint: 'fs_main', targets: [{ format: canvasFormat }] },
+      fragment: {
+        module: renderModule,
+        entryPoint: 'fs_main',
+        constants: { NUM_GRAINS: numGrains },
+        targets: [{ format: canvasFormat }],
+      },
     });
     this.renderBG_A = this.makeRenderBindGroup(this.phiA);
     this.renderBG_B = this.makeRenderBindGroup(this.phiB);
@@ -217,7 +232,6 @@ export class GrainGrowthSolver implements DiffusionEngine {
 
   loadField(data: Float32Array<ArrayBuffer>): void {
     this.device.queue.writeBuffer(this.phiA, 0, data);
-    this.device.queue.writeBuffer(this.phiB, 0, new Float32Array(data.length) as Float32Array<ArrayBuffer>);
     this.parity = 0;
     this._state.stepsRun = 0;
     this._state.time = 0;
@@ -225,12 +239,66 @@ export class GrainGrowthSolver implements DiffusionEngine {
 
   step(n: number): void {
     const encoder = this.device.createCommandEncoder({ label: 'gg-step' });
-    const [wx, wy] = dispatchSize(this.width, this.height);
+    this.encodeSteps(encoder, n);
+    this.device.queue.submit([encoder.finish()]);
+  }
 
-    // Each step is its own compute pass. Separate beginComputePass/endComputePass
-    // calls provide the implicit memory barrier: step i+1 is guaranteed to see
-    // the phiOut values written by step i before it reads them as phiIn.
-    // (Within a single pass, dispatches are not ordered — never combine steps.)
+  render(): void {
+    const encoder = this.device.createCommandEncoder({ label: 'gg-render' });
+    this.encodeRender(encoder);
+    this.device.queue.submit([encoder.finish()]);
+  }
+
+  stepAndRender(n: number): void {
+    const encoder = this.device.createCommandEncoder({ label: 'gg-step-render' });
+    this.encodeSteps(encoder, n);
+    this.encodeRender(encoder);
+    this.device.queue.submit([encoder.finish()]);
+  }
+
+  /** Not meaningful for GG (no scalar concentration). No-op for interface compatibility. */
+  updateMaterialColors(_colorA: [number, number, number], _colorB: [number, number, number]): void {}
+
+  /** Read the full phi field [numGrains × W × H] f32 from GPU. Slow — diagnostics only. */
+  async readField(): Promise<Float32Array> {
+    const size = this.numGrains * this.width * this.height * BYTES_PER_CELL;
+    const encoder = this.device.createCommandEncoder();
+    encoder.copyBufferToBuffer(this.currentBuffer, 0, this.readbackBuffer, 0, size);
+    this.device.queue.submit([encoder.finish()]);
+
+    await this.readbackBuffer.mapAsync(GPUMapMode.READ);
+    const mapped = this.readbackBuffer.getMappedRange();
+    const copy = new ArrayBuffer(mapped.byteLength);
+    new Uint8Array(copy).set(new Uint8Array(mapped));
+    this.readbackBuffer.unmap();
+    return new Float32Array(copy);
+  }
+
+  destroy(): void {
+    this.phiA.destroy();
+    this.phiB.destroy();
+    this.uniformBuffer.destroy();
+    this.renderUniformBuffer.destroy();
+    this.colorTableBuffer.destroy();
+    this.readbackBuffer.destroy();
+  }
+
+  private makeRenderBindGroup(phiBuf: GPUBuffer): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.renderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.renderUniformBuffer } },
+        { binding: 1, resource: { buffer: phiBuf } },
+        { binding: 2, resource: { buffer: this.colorTableBuffer } },
+      ],
+    });
+  }
+
+  /** Encode n stable Euler updates; each dispatch stays in its own pass for the required barrier. */
+  private encodeSteps(encoder: GPUCommandEncoder, n: number): void {
+    if (n <= 0) return;
+
+    const [wx, wy] = dispatchSize(this.width, this.height);
     for (let i = 0; i < n; i++) {
       const bg = this.parity === 0 ? this.bindGroupAtoB : this.bindGroupBtoA;
       const pass = encoder.beginComputePass({ label: 'gg-constrained' });
@@ -241,15 +309,13 @@ export class GrainGrowthSolver implements DiffusionEngine {
       this.parity = 1 - this.parity;
     }
 
-    this.device.queue.submit([encoder.finish()]);
     this._state.stepsRun += n;
     this._state.time += n * this._state.dt;
   }
 
-  render(): void {
-    const encoder = this.device.createCommandEncoder({ label: 'gg-render' });
+  /** Encode the blended grain-color render pass for the current ping-pong buffer. */
+  private encodeRender(encoder: GPUCommandEncoder): void {
     const bg = this.parity === 0 ? this.renderBG_A : this.renderBG_B;
-
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: this.context.getCurrentTexture().createView(),
@@ -262,48 +328,5 @@ export class GrainGrowthSolver implements DiffusionEngine {
     pass.setBindGroup(0, bg);
     pass.draw(3);
     pass.end();
-    this.device.queue.submit([encoder.finish()]);
-  }
-
-  /** Not meaningful for GG (no scalar concentration). No-op for interface compatibility. */
-  updateMaterialColors(_colorA: [number, number, number], _colorB: [number, number, number]): void {}
-
-  /** Read the full phi field [numGrains × W × H] f32 from GPU. Slow — diagnostics only. */
-  async readField(): Promise<Float32Array> {
-    const size = this.numGrains * this.width * this.height * BYTES_PER_CELL;
-    const staging = this.device.createBuffer({
-      size,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    });
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(this.currentBuffer, 0, staging, 0, size);
-    this.device.queue.submit([encoder.finish()]);
-
-    await staging.mapAsync(GPUMapMode.READ);
-    const mapped = staging.getMappedRange();
-    const copy = new ArrayBuffer(mapped.byteLength);
-    new Uint8Array(copy).set(new Uint8Array(mapped));
-    staging.unmap();
-    staging.destroy();
-    return new Float32Array(copy);
-  }
-
-  destroy(): void {
-    this.phiA.destroy();
-    this.phiB.destroy();
-    this.uniformBuffer.destroy();
-    this.renderUniformBuffer.destroy();
-    this.colorTableBuffer.destroy();
-  }
-
-  private makeRenderBindGroup(phiBuf: GPUBuffer): GPUBindGroup {
-    return this.device.createBindGroup({
-      layout: this.renderPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.renderUniformBuffer } },
-        { binding: 1, resource: { buffer: phiBuf } },
-        { binding: 2, resource: { buffer: this.colorTableBuffer } },
-      ],
-    });
   }
 }

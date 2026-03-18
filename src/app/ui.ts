@@ -13,13 +13,20 @@
 
 import {
   FickSolver, CahnHilliardSolver, GrainGrowthSolver, BinarySolidificationSolver,
-  MATERIALS, CH_MATERIALS, DEFAULT_SOLID_CONFIG, SOLID_MATERIALS,
+  MATERIALS, CH_MATERIALS, GG_MATERIALS, DEFAULT_SOLID_CONFIG, SOLID_MATERIALS,
+  arrheniusRelativeFactor,
 } from '../engine';
 import type { SimConfig, CahnHilliardConfig, GGConfig, SolidificationConfig } from '../engine';
 import type { SimMode, DiffusionEngine } from '../engine/types';
 import type { Loop } from './loop';
 import { generateDefaultField, imageFileToField } from './imageLoader';
-import { generateSpinodalField, generateVoronoiField } from './initialConditions';
+import {
+  generateSpinodalField,
+  generateVoronoiField,
+  generatePlanarInterface,
+  generateCircularGrain,
+  generateTripleJunction,
+} from './initialConditions';
 import { generateSolidSeed, generatePlanarSolidInterface, generateMultiSeed } from './binarySolidificationInit';
 import { createValidation, fieldSum, runValidationChecks } from './validation';
 import type { GGValidationParams } from './validation';
@@ -84,7 +91,12 @@ export function initUI(ctx: UIContext): FrameCallback {
   const chSpinodalWarning = $<HTMLDivElement>('ch-spinodal-warning');
 
   // Grain Growth-specific
+  const selGGIC = $<HTMLSelectElement>('sel-gg-ic');
+  const selGGMaterial = $<HTMLSelectElement>('sel-gg-material');
+  const slGGTemp = $<HTMLInputElement>('sl-gg-temp');
+  const valGGTemp = $<HTMLSpanElement>('val-gg-temp');
   const selGGGrains = $<HTMLSelectElement>('sel-gg-grains');
+  const ggWarning = $<HTMLDivElement>('gg-warning');
   const btnGGValidate = $<HTMLButtonElement>('btn-gg-validate');
 
   // Solidification-specific
@@ -96,6 +108,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   const valSolidSeedRadius = $<HTMLSpanElement>('val-solid-seed-radius');
 
   // Domain / grid
+  const rowDomain = $<HTMLDivElement>('row-domain');
   const selDomain = $<HTMLSelectElement>('sel-domain');
   const selGrid = $<HTMLSelectElement>('sel-grid');
   const slSpeed = $<HTMLInputElement>('sl-speed');
@@ -104,6 +117,12 @@ export function initUI(ctx: UIContext): FrameCallback {
 
   // Info readouts
   const infoMode = $('info-mode');
+  const rowInfoD = $('row-info-d');
+  const rowInfoR = $('row-info-r');
+  const lblInfoD = $('lbl-info-d');
+  const lblInfoDt = $('lbl-info-dt');
+  const lblInfoDx = $('lbl-info-dx');
+  const lblInfoTime = $('lbl-info-time');
   const infoD = $('info-D');
   const infoDt = $('info-dt');
   const infoDx = $('info-dx');
@@ -112,6 +131,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   const infoSteps = $('info-steps');
   const infoFps = $('info-fps');
   const lblMassError = $('lbl-mass-error');
+  const lblRmsError = $('lbl-rms-error');
   const infoMassError = $('info-mass-error');
   const infoRmsError = $('info-rms-error');
   const infoSimplexResidual = $('info-simplex-residual');
@@ -129,12 +149,44 @@ export function initUI(ctx: UIContext): FrameCallback {
   let currentTemperature = parseInt(slTemperature.value, 10);
   let currentDomainSize = parseFloat(selDomain.value);
   let currentGridWidth = parseInt(selGrid.value, 10);
+  let currentGGMaterialKey = selGGMaterial.value;
+  let currentGGTemperature = parseInt(slGGTemp.value, 10);
 
   // GG nondimensional defaults
   const GG_KAPPA = 1.0;
   const GG_W = 1.0;
   const GG_A = 1.0;
   const GG_L = 1.0;
+
+  function ggFixedGrainCount(ic: string): number | null {
+    switch (ic) {
+      case 'planar':
+      case 'circular':
+        return 2;
+      case 'triple':
+        return 3;
+      default:
+        return null;
+    }
+  }
+
+  /** Relative Arrhenius mobility used as a teaching readout for grain growth. */
+  function currentGGRelativeMobility(): number {
+    const mat = GG_MATERIALS[currentGGMaterialKey];
+    return arrheniusRelativeFactor(mat.Q_gb, currentGGTemperature, mat.T_ref);
+  }
+
+  /** Keep GG controls consistent with the selected canonical initial condition. */
+  function updateGGControls(): boolean {
+    const requiredGrains = ggFixedGrainCount(selGGIC.value);
+    let changed = false;
+    if (requiredGrains !== null && parseInt(selGGGrains.value, 10) !== requiredGrains) {
+      selGGGrains.value = String(requiredGrains);
+      changed = true;
+    }
+    selGGGrains.disabled = requiredGrains !== null;
+    return changed;
+  }
 
   // ---- Engine factory ----
 
@@ -248,6 +300,32 @@ export function initUI(ctx: UIContext): FrameCallback {
     }
   }
 
+  /** Update the grain-growth teaching note for material and temperature. */
+  function updateGGWarning(): void {
+    const mat = GG_MATERIALS[currentGGMaterialKey];
+    const relMobility = currentGGRelativeMobility();
+    const outOfRange = currentGGTemperature < mat.T_min || currentGGTemperature > mat.T_max;
+    ggWarning.hidden = false;
+    ggWarning.textContent = outOfRange
+      ? `${mat.name}: ${currentGGTemperature} K is outside the recommended teaching range (${mat.T_min}\u2013${mat.T_max} K). Relative mobility = ${relMobility.toFixed(2)}\u00D7 reference.`
+      : `${mat.name}: relative grain-boundary mobility = ${relMobility.toFixed(2)}\u00D7 reference at ${currentGGTemperature} K.`;
+  }
+
+  /** Build the current grain-growth initial condition. */
+  function makeGGField(): Float32Array {
+    const numGrains = parseInt(selGGGrains.value, 10);
+    switch (selGGIC.value) {
+      case 'planar':
+        return generatePlanarInterface(currentGridWidth);
+      case 'circular':
+        return generateCircularGrain(currentGridWidth);
+      case 'triple':
+        return generateTripleJunction(currentGridWidth);
+      default:
+        return generateVoronoiField(currentGridWidth, numGrains);
+    }
+  }
+
   /** Apply physics config to the current solver. Mode-aware. */
   function applyConfig(): void {
     switch (currentMode) {
@@ -272,6 +350,7 @@ export function initUI(ctx: UIContext): FrameCallback {
         const config = makeGGConfig();
         (ctx.solver as GrainGrowthSolver).updateGGConfig(config);
         warningsDiv.innerHTML = '';
+        updateGGWarning();
         break;
       }
       case 'binary-solidification': {
@@ -299,8 +378,7 @@ export function initUI(ctx: UIContext): FrameCallback {
         break;
       }
       case 'grain-growth': {
-        const numGrains = parseInt(selGGGrains.value, 10);
-        field = generateVoronoiField(currentGridWidth, numGrains);
+        field = makeGGField();
         break;
       }
       case 'binary-solidification': {
@@ -362,6 +440,7 @@ export function initUI(ctx: UIContext): FrameCallback {
     chControls.hidden = currentMode !== 'cahn-hilliard';
     ggControls.hidden = currentMode !== 'grain-growth';
     solidControls.hidden = currentMode !== 'binary-solidification';
+    rowDomain.hidden = currentMode === 'grain-growth';
     // Image upload is only useful for Fick
     lblImageUpload.hidden = currentMode !== 'fick';
     // Simplex diagnostics only meaningful for GG
@@ -405,6 +484,9 @@ export function initUI(ctx: UIContext): FrameCallback {
     if (wasPlaying) ctx.loop.pause();
 
     currentMode = selMode.value as SimMode;
+    if (currentMode === 'grain-growth') {
+      updateGGControls();
+    }
     updateModeVisibility();
     recreateEngine(currentMode, currentGridWidth);
     applyConfig();
@@ -445,6 +527,38 @@ export function initUI(ctx: UIContext): FrameCallback {
   slCHMean.addEventListener('input', () => {
     valCHMean.textContent = parseFloat(slCHMean.value).toFixed(2);
     // Mean phi only affects the IC, not the running sim config
+  });
+
+  // ---- GG teaching controls ----
+  selGGMaterial.addEventListener('change', () => {
+    currentGGMaterialKey = selGGMaterial.value;
+    updateGGWarning();
+  });
+  slGGTemp.addEventListener('input', () => {
+    currentGGTemperature = parseInt(slGGTemp.value, 10);
+    valGGTemp.textContent = String(currentGGTemperature);
+    updateGGWarning();
+  });
+  selGGIC.addEventListener('change', () => {
+    const wasPlaying = ctx.loop.playing;
+    if (wasPlaying) ctx.loop.pause();
+
+    const changedGrainCount = updateGGControls();
+    if (currentMode === 'grain-growth' && changedGrainCount) {
+      recreateEngine('grain-growth', currentGridWidth);
+      applyConfig();
+    }
+    if (currentMode === 'grain-growth') {
+      resetField();
+    } else {
+      updateGGWarning();
+    }
+
+    if (wasPlaying) {
+      ctx.loop.play();
+      btnPlay.disabled = true;
+      btnPause.disabled = false;
+    }
   });
 
   // ---- GG validation suite ----
@@ -495,6 +609,7 @@ export function initUI(ctx: UIContext): FrameCallback {
   // ---- GG controls ----
   selGGGrains.addEventListener('change', () => {
     // Changing grain count requires engine recreation (buffer size changes)
+    if (selGGGrains.disabled) return;
     const wasPlaying = ctx.loop.playing;
     if (wasPlaying) ctx.loop.pause();
     recreateEngine('grain-growth', currentGridWidth);
@@ -564,33 +679,49 @@ export function initUI(ctx: UIContext): FrameCallback {
     validation.initialMass = fieldSum(initField);
   }
 
+  updateGGControls();
+  updateGGWarning();
+
   // Set initial mode visibility
   updateModeVisibility();
 
   // Return the per-frame callback for the loop to call
   return (info) => {
     const state = ctx.solver.state;
+    const ggRelMobility = currentGGRelativeMobility();
 
     // Mode name
     infoMode.textContent = modeName(currentMode);
 
-    // D(T) and r are only meaningful for Fick
+    // Mode-aware labels
+    lblInfoD.textContent = currentMode === 'grain-growth' ? 'Rel. mobility' : 'D(T)';
+    lblInfoDt.textContent = currentMode === 'grain-growth' ? 'dt*' : 'dt';
+    lblInfoDx.textContent = currentMode === 'grain-growth' ? 'dx' : 'dx';
+    lblInfoTime.textContent = currentMode === 'grain-growth' ? 'Coarsen. time' : 'Sim time';
+    lblRmsError.textContent = currentMode === 'grain-growth' ? 'Free energy' : 'RMS vs erfc';
+    rowInfoD.hidden = false;
+    rowInfoR.hidden = currentMode !== 'fick';
+
+    // D(T) and r are only meaningful for Fick; GG uses relative mobility instead.
     if (currentMode === 'fick') {
       infoD.textContent = `${sci(state.diffusivity)} m\u00B2/s`;
       infoR.textContent = state.r.toFixed(4);
+    } else if (currentMode === 'grain-growth') {
+      infoD.textContent = `${ggRelMobility.toFixed(2)} \u00D7 ref`;
+      infoR.textContent = '\u2014';
     } else {
       infoD.textContent = '\u2014';
       infoR.textContent = '\u2014';
     }
 
-    // dt display: solidification is nondimensional — show raw value
-    infoDt.textContent = currentMode === 'binary-solidification'
+    // dt display: GG and solidification are nondimensional.
+    infoDt.textContent = currentMode === 'binary-solidification' || currentMode === 'grain-growth'
       ? sci(state.dt)
       : `${sci(state.dt)} s`;
-    infoDx.textContent = currentMode === 'binary-solidification'
+    infoDx.textContent = currentMode === 'binary-solidification' || currentMode === 'grain-growth'
       ? '1 (nondim)'
       : `${sci(state.dx)} m`;
-    infoTime.textContent = currentMode === 'binary-solidification'
+    infoTime.textContent = currentMode === 'binary-solidification' || currentMode === 'grain-growth'
       ? sci(state.time)
       : formatTime(state.time);
     infoSteps.textContent = info.stepsRun.toLocaleString();
@@ -598,7 +729,7 @@ export function initUI(ctx: UIContext): FrameCallback {
 
     // Validation readouts — mode-dependent
     if (currentMode === 'grain-growth') {
-      lblMassError.textContent = 'Grains';
+      lblMassError.textContent = 'Active grains';
       infoMassError.textContent = validation.lastGrainCount > 0
         ? String(validation.lastGrainCount)
         : '\u2014';

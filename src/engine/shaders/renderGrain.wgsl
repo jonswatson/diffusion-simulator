@@ -20,6 +20,8 @@ struct RenderUniforms {
   _pad1     : f32,
 }
 
+override NUM_GRAINS : u32 = 8u;
+
 @group(0) @binding(0) var<uniform>       uniforms   : RenderUniforms;
 @group(0) @binding(1) var<storage, read> phi        : array<f32>;
 @group(0) @binding(2) var<storage, read> colorTable : array<f32>;  // [numGrains × 3]
@@ -57,7 +59,7 @@ fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   // Weighted blend: color = Σᵢ φᵢ · colorTable[i]
   // With Σφᵢ = 1, this is a proper convex combination — no black bands.
   var color = vec3f(0.0);
-  for (var g = 0u; g < uniforms.numGrains; g++) {
+  for (var g = 0u; g < NUM_GRAINS; g++) {
     let phi_g = phi[g * planeSize + pix];
     let r     = colorTable[g * 3u];
     let gr    = colorTable[g * 3u + 1u];

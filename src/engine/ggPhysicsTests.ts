@@ -127,7 +127,7 @@ export async function planarInterfaceTest(
   canvasFormat: GPUTextureFormat,
 ): Promise<GGTestResult> {
   const gridSize = 128;
-  const { solver, config } = makeTestSolver(device, canvasFormat, gridSize, 2);
+  const { solver } = makeTestSolver(device, canvasFormat, gridSize, 2);
   const N = gridSize;
   const planeSize = N * N;
 

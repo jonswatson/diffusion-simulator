@@ -6,8 +6,11 @@
       "runtimeExecutable": "/Users/jonathanwatson/.nvm/versions/node/v22.22.1/bin/node",
       "runtimeArgs": [
         "node_modules/.bin/vite",
-        "/Users/jonathanwatson/code_projects/diffusion_simulator/.claude/worktrees/romantic-poincare",
-        "--force"
+        "/Users/jonathanwatson/code_projects/diffusion_simulator",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5173"
       ],
       "port": 5173
     }

@@ -4,3 +4,8 @@ dist/
 *.local
 test-results/
 playwright-report/
+.DS_Store
+.claire/
+.claude/settings.local.json
+.claude/worktrees/
+.codex/

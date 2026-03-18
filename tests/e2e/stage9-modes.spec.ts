@@ -82,9 +82,9 @@ test.describe('Stage 9: Mode Switching', () => {
     const modeText = await page.locator('#info-mode').textContent();
     expect(modeText).toBe('Grain Growth');
 
-    // dt should be displayed (not a dash)
+    // dt should be displayed as a nondimensional value (not a dash)
     const dtText = await page.locator('#info-dt').textContent();
-    expect(dtText).toContain('s');
+    expect(dtText).not.toBe('—');
 
     // Play briefly — should not crash
     await page.locator('#btn-play').click();

@@ -37,6 +37,8 @@ struct Uniforms {
   _pad      : f32,
 }
 
+override NUM_GRAINS : u32 = 8u;
+
 @group(0) @binding(0) var<uniform>             u      : Uniforms;
 @group(0) @binding(1) var<storage, read>       phiIn  : array<f32>;
 @group(0) @binding(2) var<storage, read_write> phiOut : array<f32>;
@@ -85,7 +87,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let N = u.gridWidth;
   if (x >= N || y >= N) { return; }
 
-  let nG        = u.numGrains;
   let planeSize = N * N;
   let pix       = y * N + x;
 
@@ -99,7 +100,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   var phi  : array<f32, 32>;
   var lap  : array<f32, 32>;
   var sumSq = 0.0;
-  for (var g = 0u; g < nG; g++) {
+  for (var g = 0u; g < NUM_GRAINS; g++) {
     let base = g * planeSize;
     let c    = phiIn[base + pix];
     phi[g]   = c;
@@ -115,7 +116,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   // Chemical potential μᵢ and λ = mean(μ)
   var mu       : array<f32, 32>;
   var lambdaVal = 0.0;
-  for (var g = 0u; g < nG; g++) {
+  for (var g = 0u; g < NUM_GRAINS; g++) {
     let p    = phi[g];
     // Double-well bulk derivative: dg/dφ = W/2·φ(1−φ)(1−2φ)
     let bulk = u.W_dw * 0.5 * p * (1.0 - p) * (1.0 - 2.0 * p);
@@ -124,19 +125,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     mu[g]     = -u.kappa * lap[g] + bulk + xtrm;
     lambdaVal += mu[g];
   }
-  lambdaVal /= f32(nG);
+  lambdaVal /= f32(NUM_GRAINS);
 
   // Constrained explicit Euler: φ̃ᵢ = φᵢ − dt·L·(μᵢ − λ)
   var phiNew: array<f32, 32>;
-  for (var g = 0u; g < nG; g++) {
+  for (var g = 0u; g < NUM_GRAINS; g++) {
     phiNew[g] = phi[g] - u.dt * u.L_mob * (mu[g] - lambdaVal);
   }
 
   // Euclidean projection onto probability simplex (φᵢ≥0, Σφᵢ=1)
-  projectSimplex(&phiNew, nG);
+  projectSimplex(&phiNew, NUM_GRAINS);
 
   // Write output
-  for (var g = 0u; g < nG; g++) {
+  for (var g = 0u; g < NUM_GRAINS; g++) {
     phiOut[g * planeSize + pix] = phiNew[g];
   }
 }

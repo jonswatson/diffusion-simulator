@@ -101,6 +101,54 @@ export const CH_MATERIALS: Record<string, CHMaterial> = {
 };
 
 // ============================================================
+// Grain growth material presets (pure materials, relative mobility only)
+// ============================================================
+
+export interface GGMaterial {
+  name: string;
+  symbol: string;
+  Q_gb: number; // J/mol — representative grain-boundary migration activation energy
+  T_ref: number; // K — reference temperature where relative mobility = 1
+  T_min: number; // K — recommended lower temperature for the preset
+  T_max: number; // K — recommended upper temperature for the preset
+}
+
+export const GG_MATERIALS: Record<string, GGMaterial> = {
+  Al: {
+    name: 'Aluminium',
+    symbol: 'Al',
+    Q_gb: 84_000,
+    T_ref: 900,
+    T_min: 500,
+    T_max: 900,
+  },
+  Cu: {
+    name: 'Copper',
+    symbol: 'Cu',
+    Q_gb: 107_000,
+    T_ref: 900,
+    T_min: 500,
+    T_max: 1200,
+  },
+  Ni: {
+    name: 'Nickel',
+    symbol: 'Ni',
+    Q_gb: 115_000,
+    T_ref: 1100,
+    T_min: 700,
+    T_max: 1400,
+  },
+  Fe: {
+    name: 'Iron',
+    symbol: 'Fe',
+    Q_gb: 104_000,
+    T_ref: 1000,
+    T_min: 700,
+    T_max: 1300,
+  },
+};
+
+// ============================================================
 // Mode-specific config interfaces
 // ============================================================
 

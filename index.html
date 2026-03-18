@@ -84,18 +84,43 @@
         <div id="gg-controls" hidden>
           <h3>Grain Growth Parameters</h3>
           <p style="font-size:0.85em;color:#aaa;margin:0 0 0.5em">
-            Constrained Allen-Cahn model (&kappa; = W = A = L = 1, nondimensional).
-            &Sigma;&phi;<sub>i</sub> = 1 enforced at every pixel via simplex projection.
+            Isotropic constrained Allen-Cahn grain growth.
+            Length and time are nondimensional in this mode; material and temperature set a relative grain-boundary mobility for comparison.
           </p>
+          <label>
+            Initial condition
+            <select id="sel-gg-ic">
+              <option value="polycrystal" selected>Polycrystal (Voronoi)</option>
+              <option value="planar">Planar boundary</option>
+              <option value="circular">Circular grain</option>
+              <option value="triple">Triple junction</option>
+            </select>
+          </label>
+          <label>
+            Pure material
+            <select id="sel-gg-material">
+              <option value="Al" selected>Aluminium</option>
+              <option value="Cu">Copper</option>
+              <option value="Ni">Nickel</option>
+              <option value="Fe">Iron (&alpha;-Fe)</option>
+            </select>
+          </label>
+          <label>
+            Temperature: <span id="val-gg-temp">900</span> K
+            <input id="sl-gg-temp" type="range" min="500" max="1400" value="900" step="10" />
+          </label>
           <label>
             Grains
             <select id="sel-gg-grains">
+              <option value="2">2</option>
+              <option value="3">3</option>
               <option value="4">4</option>
               <option value="8" selected>8</option>
               <option value="12">12</option>
               <option value="16">16</option>
             </select>
           </label>
+          <div id="gg-warning" hidden class="warning"></div>
           <button id="btn-gg-validate" style="margin-top:0.5em;width:100%">Run validation suite</button>
         </div>
 
@@ -134,17 +159,19 @@
           </label>
         </div>
 
-        <h3>Domain</h3>
-        <label>
-          Domain size
-          <select id="sel-domain">
-            <option value="50e-6">50 &micro;m</option>
-            <option value="100e-6" selected>100 &micro;m</option>
-            <option value="200e-6">200 &micro;m</option>
-            <option value="500e-6">500 &micro;m</option>
-            <option value="1e-3">1 mm</option>
-          </select>
-        </label>
+        <div id="row-domain">
+          <h3>Domain</h3>
+          <label>
+            Domain size
+            <select id="sel-domain">
+              <option value="50e-6">50 &micro;m</option>
+              <option value="100e-6" selected>100 &micro;m</option>
+              <option value="200e-6">200 &micro;m</option>
+              <option value="500e-6">500 &micro;m</option>
+              <option value="1e-3">1 mm</option>
+            </select>
+          </label>
+        </div>
 
         <label>
           Grid resolution
@@ -174,18 +201,18 @@
         <h3>Simulation Info</h3>
         <table>
           <tr><td>Mode</td><td id="info-mode">Fick</td></tr>
-          <tr><td>D(T)</td><td id="info-D">—</td></tr>
-          <tr><td>dt</td><td id="info-dt">—</td></tr>
-          <tr><td>dx</td><td id="info-dx">—</td></tr>
-          <tr><td>r (Fourier)</td><td id="info-r">—</td></tr>
-          <tr><td>Sim time</td><td id="info-time">—</td></tr>
+          <tr id="row-info-d"><td id="lbl-info-d">D(T)</td><td id="info-D">—</td></tr>
+          <tr><td id="lbl-info-dt">dt</td><td id="info-dt">—</td></tr>
+          <tr><td id="lbl-info-dx">dx</td><td id="info-dx">—</td></tr>
+          <tr id="row-info-r"><td>r (Fourier)</td><td id="info-r">—</td></tr>
+          <tr><td id="lbl-info-time">Sim time</td><td id="info-time">—</td></tr>
           <tr><td>Steps</td><td id="info-steps">—</td></tr>
           <tr><td>FPS</td><td id="info-fps">—</td></tr>
         </table>
         <h3>Validation</h3>
         <table>
           <tr><td id="lbl-mass-error">Mass drift</td><td id="info-mass-error">—</td></tr>
-          <tr><td>RMS vs erfc</td><td id="info-rms-error">—</td></tr>
+          <tr><td id="lbl-rms-error">RMS vs erfc</td><td id="info-rms-error">—</td></tr>
           <tr id="row-simplex-residual" hidden><td>&Sigma;&phi;<sub>i</sub>−1 max</td><td id="info-simplex-residual">—</td></tr>
           <tr id="row-min-max-phi" hidden><td>min/max &phi;</td><td id="info-min-max-phi">—</td></tr>
         </table>

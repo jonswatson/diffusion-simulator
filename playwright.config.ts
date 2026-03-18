@@ -6,12 +6,12 @@ export default defineConfig({
   retries: 1, // Chrome GPU init can be flaky on first launch
   workers: 1, // WebGPU tests need exclusive GPU access
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
+    command: 'npm run dev -- --host 127.0.0.1',
+    url: 'http://127.0.0.1:5173',
     reuseExistingServer: !process.env.CI,
   },
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://127.0.0.1:5173',
   },
   projects: [
     {

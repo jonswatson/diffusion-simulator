@@ -21,6 +21,7 @@ export interface ValidationState {
   lastSimplexResidual: number; // max |Σᵢ φᵢ(x,y) − 1| over all pixels
   lastMinPhi: number;          // global min of any φᵢ (should be ≥ 0)
   lastMaxPhi: number;          // global max of any φᵢ (should be ≤ 1)
+  checkInFlight: boolean;
 }
 
 /** Compute the total "mass" (sum of all concentration values) from a field. */
@@ -173,6 +174,7 @@ export function createValidation(): ValidationState {
     lastSimplexResidual: 0,
     lastMinPhi: 0,
     lastMaxPhi: 1,
+    checkInFlight: false,
   };
 }
 
@@ -201,33 +203,38 @@ export async function runValidationChecks(
   const stepsSinceCheck = state.stepsRun - validation.lastCheckStep;
 
   // Only check every 500 steps to avoid GPU readback overhead
-  if (stepsSinceCheck < 500 || state.stepsRun === 0) return;
+  if (stepsSinceCheck < 500 || state.stepsRun === 0 || validation.checkInFlight) return;
 
   validation.lastCheckStep = state.stepsRun;
+  validation.checkInFlight = true;
 
-  const field = await solver.readField();
+  try {
+    const field = await solver.readField();
 
-  if (mode === 'grain-growth' && ggParams) {
-    const { maxAbsErr, minPhi, maxPhi } = computeSimplexResidual(
-      field, ggParams.numGrains, gridWidth,
-    );
-    validation.lastSimplexResidual = maxAbsErr;
-    validation.lastMinPhi = minPhi;
-    validation.lastMaxPhi = maxPhi;
-    validation.lastFreeEnergy = computeFullGGFreeEnergy(
-      field, ggParams.numGrains, gridWidth, ggParams.kappa, ggParams.W, ggParams.A,
-    );
-    validation.lastGrainCount = countActiveGrains(field, ggParams.numGrains, gridWidth);
-  } else {
-    // Mass conservation: total concentration/composition is conserved
-    const currentMass = fieldSum(field);
-    if (validation.initialMass > 0) {
-      validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+    if (mode === 'grain-growth' && ggParams) {
+      const { maxAbsErr, minPhi, maxPhi } = computeSimplexResidual(
+        field, ggParams.numGrains, gridWidth,
+      );
+      validation.lastSimplexResidual = maxAbsErr;
+      validation.lastMinPhi = minPhi;
+      validation.lastMaxPhi = maxPhi;
+      validation.lastFreeEnergy = computeFullGGFreeEnergy(
+        field, ggParams.numGrains, gridWidth, ggParams.kappa, ggParams.W, ggParams.A,
+      );
+      validation.lastGrainCount = countActiveGrains(field, ggParams.numGrains, gridWidth);
+    } else {
+      // Mass conservation: total concentration/composition is conserved
+      const currentMass = fieldSum(field);
+      if (validation.initialMass > 0) {
+        validation.lastMassError = Math.abs(currentMass - validation.initialMass) / validation.initialMass;
+      }
+
+      // Analytical comparison (only valid for Fick default step-function IC)
+      if (mode === 'fick' && state.time > 0) {
+        validation.lastAnalyticalRMS = midlineRMSError(field, gridWidth, state);
+      }
     }
-
-    // Analytical comparison (only valid for Fick default step-function IC)
-    if (mode === 'fick' && state.time > 0) {
-      validation.lastAnalyticalRMS = midlineRMSError(field, gridWidth, state);
-    }
+  } finally {
+    validation.checkInFlight = false;
   }
 }
